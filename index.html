@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>STEEL RAMPAGE</title>
+  <link rel="stylesheet" href="/src/style.css" />
+</head>
+<body>
+  <div id="app"></div>
+
+  <!-- HUD -->
+  <div id="hud" class="hidden">
+    <div id="scoreboard"></div>
+    <div id="killfeed"></div>
+    <div id="timer" class="hidden">3:00</div>
+
+    <div id="bottom-left">
+      <div id="status-chips"></div>
+      <div id="shield-row" class="hidden">
+        <div class="bar-label shield-label">SHIELD</div>
+        <div class="bar-outer segs shield"><div id="shield-bar" class="bar-segs"></div></div>
+      </div>
+      <div class="bar-label">ARMOR</div>
+      <div class="bar-outer segs"><div id="health-bar" class="bar-segs"></div></div>
+      <div class="bar-label">TURBO</div>
+      <div class="bar-outer turbo"><div id="turbo-bar" class="bar-inner turbo"></div></div>
+      <div id="special-label" class="bar-label special">SPECIAL</div>
+      <div class="bar-outer special"><div id="special-bar" class="bar-inner special"></div></div>
+    </div>
+    <div id="panic"></div>
+    <div id="dmg-popups"></div>
+
+    <div id="bottom-right">
+      <div id="ammo-row"><span id="missile-count">🚀 ×4</span><span id="mine-count">💣 ×0</span></div>
+      <canvas id="radar" width="150" height="150"></canvas>
+    </div>
+
+    <div id="toasts"></div>
+    <div id="lock-ring" class="hidden"></div>
+    <div id="lock-indicator" class="hidden">◈ LOCKED ◈</div>
+    <div id="crosshair">·</div>
+    <div id="hitmarker" class="hidden">✕</div>
+    <div id="vignette"></div>
+
+    <div id="respawn-overlay" class="hidden">
+      <div class="wrecked">WRECKED</div>
+      <div id="respawn-timer">3</div>
+    </div>
+  </div>
+
+  <!-- MAIN MENU -->
+  <div id="menu">
+    <h1 class="title">STEEL<span> RAMPAGE</span></h1>
+    <div class="subtitle">ARENA VEHICULAR MAYHEM</div>
+    <div id="mode-select"></div>
+    <div id="car-select"></div>
+    <div id="online-panel">
+      <input id="player-name" maxlength="12" placeholder="YOUR NAME" />
+      <button id="host-btn">HOST PRIVATE GAME</button>
+      <span class="online-sep">or</span>
+      <input id="join-code" maxlength="4" placeholder="CODE" />
+      <button id="join-btn">JOIN</button>
+      <div id="online-status"></div>
+    </div>
+    <div id="lobby" class="hidden">
+      <div id="lobby-title">ROOM <span id="lobby-code"></span></div>
+      <div id="lobby-players"></div>
+      <div id="lobby-hint"></div>
+      <button id="lobby-leave">LEAVE ROOM</button>
+    </div>
+    <button id="start-btn">ENTER THE ARENA</button>
+    <div class="controls-help">
+      <span><b>W/S</b> drive</span><span><b>A/D</b> steer</span><span><b>SHIFT</b> turbo</span>
+      <span><b>SPACE</b> handbrake</span><span><b>CLICK / F</b> machine gun</span>
+      <span><b>RCLICK / E</b> special</span><span><b>G</b> missile</span><span><b>Q</b> mine</span>
+      <span><b>R</b> flip car</span><span><b>ESC</b> pause</span><span><b>M</b> mute</span>
+    </div>
+  </div>
+
+  <!-- PAUSE -->
+  <div id="pause" class="hidden">
+    <h1>PAUSED</h1>
+    <button id="resume-btn">RESUME</button>
+    <button id="quit-btn" class="secondary">QUIT TO MENU</button>
+  </div>
+
+  <!-- GAME OVER -->
+  <div id="gameover" class="hidden">
+    <h1 id="gameover-title">VICTORY</h1>
+    <div id="gameover-subtitle"></div>
+    <div id="final-board"></div>
+    <button id="restart-btn">PLAY AGAIN</button>
+  </div>
+
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>

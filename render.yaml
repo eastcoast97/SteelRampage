@@ -1,0 +1,17 @@
+# Render Blueprint — deploys the whole game (relay + static build) as ONE free
+# web service. Render injects PORT; the server serves dist/ and the wss relay on
+# it. See docs/DEPLOY.md for the click-through steps.
+services:
+  - type: web
+    name: steel-rampage
+    runtime: node
+    plan: free
+    # --include=dev forces the build tools (tsc, vite) to install even though
+    # Render sets NODE_ENV=production during the build.
+    buildCommand: npm install --include=dev && npm run build
+    startCommand: node server/server.js
+    healthCheckPath: /healthz
+    autoDeploy: true
+    envVars:
+      - key: NODE_VERSION
+        value: "20"
