@@ -114,6 +114,8 @@ interface Barrel {
   alive: boolean;
   respawnTimer: number;
   fuse: number; // > 0 → detonating soon (chain reactions)
+  /** gas pumps: fixed super-barrels — bigger blast, longer respawn */
+  isPump?: boolean;
 }
 
 const _v1 = new THREE.Vector3();
@@ -155,6 +157,24 @@ function makeHexFieldTexture(): THREE.CanvasTexture {
 export class Game {
   scene = new THREE.Scene();
   camera: THREE.PerspectiveCamera;
+  /** which ARENAS entry this match runs on (radar + layout selection) */
+  arenaIdx = 0;
+  /** the marked score leader — killing them grants a full special bar */
+  bountyTarget: Vehicle | null = null;
+  private bountyMarker: THREE.Mesh | null = null;
+  /** SUDDEN DEATH: a kill-ring shrinks toward the town square late in the
+   *  match — outside it you burn. Infinity = not active. */
+  suddenDeathR = Infinity;
+  private sdStartTime = 0;
+  private sdNextTick = 0;
+  private sdWall: THREE.Mesh | null = null;
+  /** CLOCK TOWER COLLAPSE — once per match: shoot it down, crush the square */
+  private towerHP = 200;
+  towerState: 'standing' | 'warning' | 'falling' | 'down' = 'standing';
+  private towerTimer = 0;
+  towerFallT = 0;
+  towerDir = new THREE.Vector3(1, 0, 0);
+  private towerPivot: THREE.Group | null = null;
   world: RAPIER.World;
   arena: ArenaData;
   effects: Effects;
@@ -203,17 +223,18 @@ export class Game {
   private camInit = false;
   private fov = 70;
 
-  constructor(playerSpec: CarSpec, hud: Hud, aspect: number, mode: GameMode = 'deathmatch', netOpts: NetOpts | null = null) {
+  constructor(playerSpec: CarSpec, hud: Hud, aspect: number, mode: GameMode = 'deathmatch', netOpts: NetOpts | null = null, arenaIdx = 0) {
     this.hud = hud;
     this.mode = mode;
     this.netOpts = netOpts;
+    this.arenaIdx = arenaIdx;
     this.timeLeft = MODES[mode].timeLimit ?? 0;
-    this.camera = new THREE.PerspectiveCamera(70, aspect, 0.1, 600);
+    this.camera = new THREE.PerspectiveCamera(70, aspect, 0.1, 800);
     this.world = new RAPIER.World({ x: 0, y: -25, z: 0 });
     this.world.timestep = FIXED_DT;
     this.eventQueue = new RAPIER.EventQueue(true);
 
-    this.arena = buildArena(this.world, this.scene, netOpts?.skyIdx);
+    this.arena = buildArena(this.world, this.scene, netOpts?.skyIdx, arenaIdx);
     this.effects = new Effects(this.scene);
 
     const sp = this.arena.spawnPoints;
@@ -372,6 +393,38 @@ export class Game {
       this.barrels.push(barrel);
       this.colliderToBarrel.set(collider.handle, barrel);
     }
+    // gas pumps: FIXED shootable super-barrels at the station — big blast,
+    // chains the barrel cluster around them
+    for (const home of this.arena.pumpPoints) {
+      const body = this.world.createRigidBody(
+        RAPIER.RigidBodyDesc.fixed().setTranslation(home.x, home.y, home.z),
+      );
+      const collider = this.world.createCollider(
+        RAPIER.ColliderDesc.cuboid(0.45, 0.9, 0.35).setFriction(0.6), body,
+      );
+      const mesh = new THREE.Group();
+      const bodyMat = new THREE.MeshStandardMaterial({ color: 0xc23018, roughness: 0.55, metalness: 0.3 });
+      const pump = new THREE.Mesh(new THREE.BoxGeometry(0.8, 1.7, 0.6), bodyMat);
+      pump.position.y = 0;
+      pump.castShadow = true;
+      const screen = new THREE.Mesh(
+        new THREE.BoxGeometry(0.55, 0.4, 0.05),
+        new THREE.MeshStandardMaterial({ color: 0xd8e8e0, emissive: 0x88ffcc, emissiveIntensity: 0.5 }),
+      );
+      screen.position.set(0, 0.35, 0.31);
+      const hose = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.04, 0.04, 0.7, 6),
+        new THREE.MeshStandardMaterial({ color: 0x17151d, roughness: 0.9 }),
+      );
+      hose.position.set(0.42, 0.1, 0);
+      hose.rotation.z = 0.35;
+      mesh.add(pump, screen, hose);
+      mesh.position.set(home.x, home.y, home.z);
+      this.scene.add(mesh);
+      const barrel: Barrel = { body, collider, mesh, home: home.clone(), alive: true, respawnTimer: 0, fuse: 0, isPump: true };
+      this.barrels.push(barrel);
+      this.colliderToBarrel.set(collider.handle, barrel);
+    }
   }
 
   /** fixed timestep simulation */
@@ -403,10 +456,13 @@ export class Game {
       }
     }
 
-    for (const b of this.bots) b.update(dt, this.vehicles, this.player, this.pickups, this.world);
+    for (const b of this.bots) b.update(dt, this.vehicles, this.player, this.pickups, this.world, this.suddenDeathR);
     for (const v of this.vehicles) this.updateLock(v, dt);
 
     this.updateBoostPads(dt);
+    this.updateBounty();
+    this.updateSuddenDeath();
+    this.updateTower(dt);
 
     for (const v of this.vehicles) {
       if (!v.alive) {
@@ -604,6 +660,9 @@ export class Game {
         barrel.fuse = 0.001; // shot barrels pop immediately
         (barrel as any).igniter = v;
         this.effects.sparks(end, 5, 0xffaa44);
+      } else if (this.arena.towerBody && hit.collider.parent()?.handle === this.arena.towerBody.handle) {
+        this.damageTower(4, v);   // structure takes double MG
+        this.effects.sparks(end, 3, 0xd0b090);
       } else {
         this.effects.sparks(end, 2, 0xcccccc);
       }
@@ -864,6 +923,9 @@ export class Game {
       v.specialActiveTime = 0.65;
       v.turretTimer = 0; // reuse as drop cadence
     }
+    // hard design invariant: NO special may stay active longer than 45s
+    // (bombs self-detonate at 4s; this guards future specials too)
+    v.specialActiveTime = Math.min(v.specialActiveTime, 45);
   }
 
   private tickMineTrail(v: Vehicle, dt: number) {
@@ -1119,7 +1181,13 @@ export class Game {
     b.body.sleep();
     const igniter: Vehicle | null = (b as any).igniter ?? null;
     (b as any).igniter = null;
-    this.explosionAt(at, BARREL_DAMAGE, BARREL_RADIUS, igniter, true);
+    if (b.isPump) {
+      b.respawnTimer = 60;   // pumps take a long time to "get repaired"
+      this.explosionAt(at, BARREL_DAMAGE * 1.6, BARREL_RADIUS * 1.7, igniter, true);
+      this.effects.trauma = Math.min(1, this.effects.trauma + 0.3);
+    } else {
+      this.explosionAt(at, BARREL_DAMAGE, BARREL_RADIUS, igniter, true);
+    }
   }
 
   /** unified AoE: damages vehicles, shoves bodies, chains barrels, does FX */
@@ -1157,6 +1225,8 @@ export class Game {
         (b as any).igniter = owner;
       }
     }
+    // explosions near the tower base chip the structure
+    if (damage > 0 && Math.hypot(at.x, at.z) < 14) this.damageTower(damage, owner);
   }
 
   private handleCollisions(dt: number) {
@@ -1227,12 +1297,169 @@ export class Game {
     });
   }
 
+  /** bounty: the OUTRIGHT leader (score ≥5, lead ≥2) wears a gold mark —
+   *  anyone who kills them gets a full special bar. Guests receive the index
+   *  in the snapshot. */
+  private updateBounty() {
+    if (this.netOpts?.role === 'guest') return;
+    const sorted = [...this.vehicles].sort((a, b) => b.score - a.score);
+    const [first, second] = sorted;
+    const newTarget =
+      first && first.score >= 5 && first.score - (second?.score ?? 0) >= 2 && !first.eliminated
+        ? first : null;
+    if (newTarget !== this.bountyTarget) {
+      this.bountyTarget = newTarget;
+      if (newTarget) {
+        this.hud.addKillFeed('◎', `BOUNTY on ${newTarget.name}`);
+        if (newTarget === this.player) this.hud.toast('BOUNTY ON YOUR HEAD', '#ffd24a');
+        if (this.netOpts?.role === 'host') {
+          this.netEvents.push({ k: 'ann', vi: this.vehicles.indexOf(newTarget), t: 'BOUNTY ON YOUR HEAD', tier: 1, feed: `BOUNTY on ${newTarget.name}` });
+        }
+      }
+    }
+  }
+
+  /** sudden death: triggers in the last 60s of time-attack, or after 4 min in
+   *  the endless modes. Ring shrinks 200→45 over 90s around the town square. */
+  private updateSuddenDeath() {
+    if (this.netOpts?.role === 'guest') return;
+    if (this.suddenDeathR === Infinity) {
+      const trigger = this.mode === 'timed' ? this.timeLeft <= 60 : this.time >= 240;
+      if (!trigger) return;
+      this.suddenDeathR = 200;
+      this.sdStartTime = this.time;
+      this.sdNextTick = this.time;
+      this.hud.toast('SUDDEN DEATH — GET TO THE SQUARE', '#ff4444');
+      this.hud.addKillFeed('⚠', 'SUDDEN DEATH — the ring is closing');
+      sfx.announce(3);
+      if (this.netOpts?.role === 'host') {
+        this.netEvents.push({ k: 'ann', vi: -1, t: 'SUDDEN DEATH — GET TO THE SQUARE', tier: 3 });
+      }
+      return;
+    }
+    this.suddenDeathR = Math.max(45, 200 - (this.time - this.sdStartTime) * 1.72);
+    // burn tick every 0.5s for anyone outside the ring
+    if (this.time >= this.sdNextTick) {
+      this.sdNextTick = this.time + 0.5;
+      for (const v of this.vehicles) {
+        if (!v.alive) continue;
+        const r = Math.hypot(v.position.x, v.position.z);
+        if (r > this.suddenDeathR + 1) {
+          if (v === this.player) this.hud.toast('OUTSIDE THE RING', '#ff4444');
+          const killed = v.takeDamage(5, v.lastDamager, this.time);
+          if (killed) this.onKill(v.lastDamager ?? v, v);
+        }
+      }
+    }
+  }
+
+  /** structure damage on the clock tower (host authority) */
+  damageTower(amount: number, source: Vehicle | null) {
+    if (this.towerState !== 'standing' || this.netOpts?.role === 'guest') return;
+    if (!this.arena.towerBody) return;
+    this.towerHP -= amount;
+    if (this.towerHP > 0) return;
+    // topple away from whoever landed the killing blow (or a random way)
+    this.towerState = 'warning';
+    this.towerTimer = 2.0;
+    const src = source?.position;
+    if (src && (src.x !== 0 || src.z !== 0)) {
+      this.towerDir.set(-src.x, 0, -src.z).normalize();
+    } else {
+      const a = Math.random() * Math.PI * 2;
+      this.towerDir.set(Math.cos(a), 0, Math.sin(a));
+    }
+    this.hud.toast('THE CLOCK TOWER IS COMING DOWN', '#ff4444');
+    this.hud.addKillFeed('⚠', 'the clock tower is falling!');
+    sfx.announce(3);
+    this.effects.trauma = 1;
+    if (this.netOpts?.role === 'host') {
+      this.netEvents.push({ k: 'twr', s: 'warn', dx: +this.towerDir.x.toFixed(3), dz: +this.towerDir.z.toFixed(3) });
+    }
+  }
+
+  private updateTower(dt: number) {
+    if (this.netOpts?.role === 'guest') return;
+    if (this.towerState === 'warning') {
+      this.towerTimer -= dt;
+      this.effects.trauma = Math.min(1, this.effects.trauma + dt * 0.5);   // ground rumble
+      if (this.towerTimer <= 0) {
+        this.towerState = 'falling';
+        this.towerFallT = 0;
+        // the standing collider goes away the moment it starts to lean
+        if (this.arena.towerBody) { this.world.removeRigidBody(this.arena.towerBody); this.arena.towerBody = undefined; }
+        if (this.netOpts?.role === 'host') this.netEvents.push({ k: 'twr', s: 'fall' });
+      }
+    } else if (this.towerState === 'falling') {
+      this.towerFallT += dt;
+      if (this.towerFallT >= 1.3) {
+        this.towerState = 'down';
+        const d = this.towerDir;
+        const at = new THREE.Vector3(d.x * 14, 1, d.z * 14);
+        this.explosionAt(at, 0, 16, null, true);   // dust/shake only — crush is below
+        this.effects.trauma = 1;
+        // crush everything under the falling shaft (a 26m lane)
+        for (const v of this.vehicles) {
+          if (!v.alive) continue;
+          const along = v.position.x * d.x + v.position.z * d.z;
+          const perp = Math.abs(v.position.x * d.z - v.position.z * d.x);
+          if (along > 3 && along < 27 && perp < 6.5) {
+            if (v === this.player) this.hud.toast('CRUSHED', '#ff4444');
+            const killed = v.takeDamage(70, null, this.time);
+            if (killed) this.onKill(v.lastDamager ?? v, v);
+          }
+        }
+        // fallen shaft becomes low rubble you can ram but not pass
+        const yaw = Math.atan2(d.x, d.z);
+        const body = this.world.createRigidBody(
+          RAPIER.RigidBodyDesc.fixed()
+            .setTranslation(d.x * 13.5, 1.0, d.z * 13.5)
+            .setRotation({ x: 0, y: Math.sin(yaw / 2), z: 0, w: Math.cos(yaw / 2) }),
+        );
+        this.world.createCollider(RAPIER.ColliderDesc.cuboid(3.2, 1.0, 12).setFriction(0.6), body);
+      }
+    }
+  }
+
   private onKill(killer: Vehicle, victim: Vehicle) {
     if (!victim.alive) return; // already dead (double-hit in same tick)
     const pos = victim.position;
     this.effects.explosion(pos, true);
     sfx.explosion(THREE.MathUtils.clamp(1.5 - pos.distanceTo(this.player.position) / 70, 0.2, 1.2));
-    if (killer !== victim) killer.score++;
+    if (killer !== victim) {
+      killer.score++;
+      // special energy is EARNED: +25% per kill; a 3-kill streak fills it
+      killer.killStreak++;
+      if (killer.killStreak >= 3 && killer.killStreak % 3 === 0) {
+        killer.specialEnergy = 1;
+        if (killer === this.player) this.hud.toast('KILL STREAK ×3 — SPECIAL FULL', '#e86bff');
+      } else {
+        killer.specialEnergy = Math.min(1, killer.specialEnergy + 0.25);
+        if (killer === this.player) this.hud.toast('+25% SPECIAL', '#c94dff');
+      }
+      // announcer stingers
+      const s = killer.killStreak;
+      const ann: [string, number] | null =
+        s === 2 ? ['DOUBLE KILL', 1] : s === 3 ? ['TRIPLE KILL', 2] :
+        s === 4 ? ['RAMPAGE', 3] : s >= 6 ? ['UNSTOPPABLE', 3] : null;
+      if (ann) {
+        if (killer === this.player) { this.hud.toast(ann[0], '#ffd24a'); sfx.announce(ann[1]); }
+        else this.hud.addKillFeed('⚡', `${killer.name} — ${ann[0]}`);
+        if (this.netOpts?.role === 'host') {
+          this.netEvents.push({ k: 'ann', vi: this.vehicles.indexOf(killer), t: ann[0], tier: ann[1] });
+        }
+      }
+      // bounty claim: killing the marked leader = instant full special
+      if (victim === this.bountyTarget) {
+        killer.specialEnergy = 1;
+        if (killer === this.player) { this.hud.toast('BOUNTY CLAIMED — SPECIAL FULL', '#ffd24a'); sfx.announce(2); }
+        else this.hud.addKillFeed('◎', `${killer.name} claimed the bounty`);
+        if (this.netOpts?.role === 'host') {
+          this.netEvents.push({ k: 'ann', vi: this.vehicles.indexOf(killer), t: 'BOUNTY CLAIMED — SPECIAL FULL', tier: 2 });
+        }
+        this.bountyTarget = null;
+      }
+    }
     this.hud.addKillFeed(killer.name, victim.name);
     if (this.netOpts?.role === 'host') this.netEvents.push({ k: 'kill', a: killer.name, v: victim.name });
     victim.kill();
@@ -1343,6 +1570,7 @@ export class Game {
     else if (type === 'turbo') v.turboMeter = v.spec.turboMax;
     else if (type === 'shield') v.shieldTime = 10;  // exactly 10s of full immunity
     else if (type === 'overdrive') v.overdriveTime = 8;
+    else if (type === 'special') v.specialEnergy = Math.min(1, v.specialEnergy + 0.25);
     else v.minesAmmo = Math.min(6, v.minesAmmo + 2);
     if (this.netOpts?.role === 'host' && !v.isBot) {
       this.netEvents.push({ k: 'pick', vi: this.vehicles.indexOf(v), item: type });
@@ -1358,6 +1586,7 @@ export class Game {
         shield: ['SHIELD ACTIVE', '#8fa5ff'],
         overdrive: ['OVERDRIVE!', '#ff44dd'],
         mines: ['+2 MINES', '#c9c9d4'],
+        special: ['+25% SPECIAL', '#c94dff'],
       };
       this.hud.toast(...toasts[type]);
     }
@@ -1365,6 +1594,69 @@ export class Game {
 
   /** per-render-frame updates (visuals, camera, HUD) */
   render(dt: number) {
+    // gold bounty diamond over the marked leader
+    if (!this.bountyMarker) {
+      const gold = new THREE.MeshStandardMaterial({
+        color: 0xffd24a, emissive: 0xcf9a1a, emissiveIntensity: 1.2, roughness: 0.3, metalness: 0.6,
+      });
+      const marker = new THREE.Mesh(new THREE.OctahedronGeometry(0.4, 0), gold);
+      marker.visible = false;
+      this.scene.add(marker);
+      this.bountyMarker = marker;
+    }
+    const bt = this.bountyTarget;
+    if (bt?.alive) {
+      this.bountyMarker.visible = true;
+      this.bountyMarker.position.set(bt.position.x, bt.position.y + 2.5 + Math.sin(this.time * 3) * 0.15, bt.position.z);
+      this.bountyMarker.rotation.y += dt * 2.4;
+    } else {
+      this.bountyMarker.visible = false;
+    }
+    // sudden-death ring wall — translucent red curtain closing on the square
+    if (!this.sdWall) {
+      const wall = new THREE.Mesh(
+        new THREE.CylinderGeometry(1, 1, 30, 64, 1, true),
+        new THREE.MeshBasicMaterial({
+          color: 0xff3020, transparent: true, opacity: 0.22, side: THREE.DoubleSide,
+          blending: THREE.AdditiveBlending, depthWrite: false, fog: false,
+        }),
+      );
+      wall.position.y = 15;
+      wall.visible = false;
+      this.scene.add(wall);
+      this.sdWall = wall;
+    }
+    if (this.suddenDeathR !== Infinity) {
+      this.sdWall.visible = true;
+      this.sdWall.scale.set(this.suddenDeathR, 1, this.suddenDeathR);
+      (this.sdWall.material as THREE.MeshBasicMaterial).opacity = 0.16 + Math.sin(this.time * 4) * 0.07;
+    } else {
+      this.sdWall.visible = false;
+    }
+    // clock tower topple animation (guests advance the fall timer here since
+    // they never step the sim; the host advanced it in updateTower)
+    if (this.towerState !== 'standing') {
+      if (!this.towerPivot) {
+        const mesh = this.scene.getObjectByName('ClockTower');
+        if (mesh) {
+          this.towerPivot = new THREE.Group();
+          this.scene.add(this.towerPivot);
+          this.towerPivot.attach(mesh);
+        }
+      }
+      if (this.towerState === 'warning' && this.towerPivot) {
+        this.towerPivot.position.x = (Math.random() - 0.5) * 0.12;   // shudder
+        this.towerPivot.position.z = (Math.random() - 0.5) * 0.12;
+      } else if (this.towerState !== 'warning' && this.towerPivot) {
+        if (this.netOpts?.role === 'guest' && this.towerState === 'falling') {
+          this.towerFallT = Math.min(1.3, this.towerFallT + dt);
+        }
+        const t = Math.min(1, this.towerFallT / 1.3);
+        const axis = _v1.set(this.towerDir.z, 0, -this.towerDir.x);
+        this.towerPivot.position.set(0, 0, 0);
+        this.towerPivot.setRotationFromAxisAngle(axis, (Math.PI / 2) * t * t);
+      }
+    }
     for (const v of this.vehicles) {
       v.syncVisual();
       // post-spawn invulnerability: blink the car so it reads as protected

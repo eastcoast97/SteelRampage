@@ -260,7 +260,7 @@ html, body {
 #respawn-timer { font-size: 40px; color: #fff; margin-top: 12px; }
 
 /* ---------- MODE SELECT ---------- */
-#mode-select { display: flex; gap: 12px; margin-bottom: 24px; flex-wrap: wrap; justify-content: center; }
+#mode-select { display: flex; gap: 12px; margin-bottom: 16px; flex-wrap: wrap; justify-content: center; }
 .mode-card {
   padding: 12px 22px;
   background: rgba(255,255,255,0.05);
@@ -304,7 +304,20 @@ html, body {
   display: flex; flex-direction: column; align-items: center; justify-content: center;
   background: radial-gradient(ellipse at 50% 30%, #241a2e 0%, #0b0a12 70%);
   color: #fff;
+  /* menu content can exceed short viewports (mode + arena + car rows) —
+     never let the START button fall below an unscrollable fold. `safe center`
+     falls back to flex-start when content overflows, so nothing clips
+     above the top edge (plain `center` makes the overflow unreachable). */
+  overflow-y: auto;
+  justify-content: safe center;
+  padding: 10px 0;
 }
+
+/* ---------- ARENA SELECT (compact row under modes) ---------- */
+#arena-select { display: flex; gap: 10px; margin: 0 0 14px; flex-wrap: wrap; justify-content: center; }
+#arena-select .mode-card { padding: 7px 16px; }
+#arena-select .mode-card h4 { font-size: 12px; }
+#arena-select .mode-card .mdesc { font-size: 9px; }
 .title {
   font-size: clamp(40px, 8vw, 84px);
   letter-spacing: 6px;
@@ -317,9 +330,14 @@ html, body {
   -webkit-background-clip: text; background-clip: text;
   -webkit-text-fill-color: transparent;
 }
-.subtitle { letter-spacing: 8px; color: #8d8a9e; font-size: 13px; margin: 8px 0 34px; }
+.subtitle { letter-spacing: 8px; color: #8d8a9e; font-size: 13px; margin: 6px 0 20px; }
+/* short screens: shrink the masthead so mode+arena+cars+START all fit unclipped */
+@media (max-height: 920px) {
+  .title { font-size: 44px; }
+  .subtitle { margin: 4px 0 14px; font-size: 11px; }
+}
 
-#car-select { display: flex; gap: 14px; margin-bottom: 30px; flex-wrap: wrap; justify-content: center; max-width: 1240px; }
+#car-select { display: flex; gap: 14px; margin-bottom: 18px; flex-wrap: wrap; justify-content: center; max-width: 1240px; }
 .car-card {
   width: 188px; padding: 14px 14px 12px;
   background: rgba(255,255,255,0.05);
@@ -335,7 +353,7 @@ html, body {
   box-shadow: 0 0 24px rgba(255,106,0,0.25);
 }
 .car-card h3 { font-size: 18px; letter-spacing: 1px; margin-bottom: 2px; }
-.car-card .desc { font-size: 11px; color: #9b97ac; font-family: Arial, sans-serif; margin-bottom: 8px; min-height: 28px; }
+.car-card .desc { font-size: 11px; color: #9b97ac; font-family: Arial, sans-serif; margin-bottom: 6px; min-height: 24px; }
 .car-card .special-tag { font-size: 11px; letter-spacing: 1px; color: #ff9ef2; }
 .car-card .special-desc { font-size: 10px; color: #8a7f96; font-family: Arial, sans-serif; margin: 2px 0 8px; min-height: 24px; }
 .car-card .stat { font-size: 10px; letter-spacing: 2px; color: #ccc; margin-top: 7px; }

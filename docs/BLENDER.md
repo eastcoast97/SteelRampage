@@ -1,0 +1,144 @@
+# Blender asset pipeline
+
+Custom game models are built **procedurally in Blender via Python** and exported
+to `public/models/*.glb`, where the existing loader (`src/render/carModels.ts`)
+picks them up.
+
+## IMPORTANT: the MCP connector does not work — use the direct socket
+
+The `mcp__Blender__*` tools **time out on every call**. Diagnosed via Blender's
+console (launch with `/Applications/Blender.app/Contents/MacOS/Blender` to see it):
+
+```
+Connected to client: ('127.0.0.1', 59722)
+Client handler started
+Client disconnected          <- no command ever received, no traceback
+```
+
+The add-on is healthy and listening; the connector and add-on disagree on message
+framing (user is on Blender 5.2, newer than the add-on targets). **Workaround:
+talk to the add-on's socket directly** — this works perfectly.
+
+Protocol: raw TCP on `localhost:9876`, one JSON message, JSON response.
+```json
+{"type": "execute_code", "params": {"code": "import bpy\n..."}}
+{"type": "get_scene_info", "params": {}}
+```
+Response: `{"status": "success", "result": {...}}`. For `execute_code` the
+`result.result` field contains anything the code `print()`ed.
+
+Helper used during development (`/tmp/bl/send.py`): opens the socket, sends a
+code file, reads until the JSON parses, prints the result. Recreate as needed —
+it's ~15 lines. Blender must be running with the add-on's "Connect" clicked.
+
+## Modeling approach that worked
+
+Naive lofting + heavy subdivision produced a featureless blob. What produced a
+real car silhouette (`/tmp/bl/car3.py` pattern):
+
+1. **Two lofted volumes**, not one: a low, flat-sided **body** plus a narrower
+   **greenhouse/cabin** with raked front and rear stations.
+2. **Superellipse cross-sections** with a high exponent (`p≈7`) so sides are
+   near-vertical and flat — low `p` rounds the car into a pod.
+3. **Wheel arches via boolean**: cylinders (axis along X) spanning the **full
+   body width**, `solver='EXACT'`. Narrow cutters only graze the sides and leave
+   flap artifacts.
+4. **Bevel (angle-limited) + Subsurf level 1 + `shade_auto_smooth`** — crisp
+   panel edges with soft transitions. Subsurf 2 melts the shape.
+
+## Axis convention
+
+Blender is Z-up; the glTF exporter maps Blender **+Y → glTF −Z**. Our cars drive
+toward **−Z**, so build the model with the **nose toward +Y** in Blender and it
+comes out facing correctly in-game. Wheels: axle along **X**.
+
+## Materials
+
+Kenney kit models are UV-mapped to a shared `colormap.png` and are recoloured by
+retinting that texture. Custom Blender models have **no map**, so `carMesh.ts`
+falls back to setting `material.color` from `spec.color` directly:
+
+```ts
+if (m.map) { if (tinted) m.map = tinted; }
+else { m.color = new THREE.Color(spec.color); }
+```
+
+## Multi-material models
+
+Build script assigns **named** materials: `Paint`, `Glass`, `Trim`, `LightWhite`,
+`LightRed`. `carMesh.ts` only recolours the material when it has no texture map,
+so authored glass/light colours survive. **Keep emission strength ≈1.0** — at 3.0
+the taillights bloom into a red pool on the ground.
+
+Greenhouse technique: the cabin loft is **glass**, with a thin painted **roof cap**
+lofted on top. The cap must sit ~0.07 *lower* than the maths suggests, because
+subdivision shrinks the cabin surface inward — otherwise it floats like a wing.
+
+## Arena authored in Blender (collision-proxy pipeline)
+
+Goal: make Blender the source of truth for the arena. glTF carries geometry, not
+physics — so we author **collision proxies** alongside the visuals.
+
+**Naming convention** (read by `placeBlenderAsset()` in `arena.ts`):
+
+| Blender object | Becomes |
+|---|---|
+| any mesh | rendered geometry (castShadow + receiveShadow) |
+| `COL_*` mesh | Rapier cuboid collider, **not rendered** |
+
+`placeBlenderAsset(world, scene, src, x, z, yaw, scale)` clones the GLB, walks it,
+decomposes each `COL_*` world matrix into position/quaternion/scale, derives
+half-extents from the geometry bounding box (handles off-origin geometry), makes a
+fixed-body cuboid collider, then removes the proxy from the scene graph.
+
+**Why proxies, not trimesh collision:** a trimesh of a detailed city would make
+every bevel, window recess and ledge a snag point — undoing the anti-snag work —
+and is slower for raycast suspension. Proxies keep exact physics control.
+
+Planned prefixes for later stages: `SPAWN_*`, `PICKUP_<type>_*`, `BOOST_*`,
+`PED_*`, `BARREL_*` (empties/boxes → the data arrays `buildArena` returns).
+
+**Sky, fog and lights stay in code** — Blender lights / Nishita sky / volume
+scatter do not export to glTF. The engine already has equivalents.
+
+**Materials must avoid procedural nodes.** glTF exports PBR *factors* + image
+textures only; Noise/ColorRamp trees would have to be baked (needs UV unwrap).
+`arena-building.glb` therefore uses plain colour/metallic/roughness factors plus
+emissive for lit windows — exports natively, no baking.
+
+### Stage status — COMPLETE (arena.glb is the arena)
+- **`arena.glb` (765 KB, 292 objects)** is generated by the Blender script
+  (`/tmp/bl/arena.py` pattern) and consumed by `consumeArenaGLB()` in `arena.ts`:
+  16 buildings (3 variants as **linked duplicates** — shared meshes keep the file
+  small), perimeter walls, interchange + ramps, skyway, bunkers, gas station,
+  billboards, streetlights, curbs, plus ALL gameplay markers (`SPAWN_`,
+  `PICKUP_<type>_`, `BARREL_`, `BOOST_`, `PED_`, `COL_`).
+- Code-side remains: sky/fog/lighting, ground + road/sidewalk textures, chevron
+  pad visuals, radar. `buildArena` falls back to the full procedural city if the
+  GLB fails to load.
+- Verified end-to-end: building collision blocks, full skyway traversal (climb →
+  crest airtime heights → descend), bridge over-deck run, pads/pickups/spawns at
+  correct positions.
+
+### Export gotchas (cost real debugging time)
+1. **`export_apply=True` bakes object transforms into vertex data** — mesh nodes
+   arrive with identity transforms. Derive marker/collider placement from the
+   geometry **bounding-box centre**, never from the node transform. (Empties keep
+   their transforms — only meshes are baked.)
+2. **`transform_apply(scale=True)` on a ROTATED object distorts the mesh** —
+   the skyway/ramps exported as horizontal slabs at max height. Always: create →
+   scale → apply scale → THEN rotate/place. (`cube()` helper does this.)
+3. **Axis rigid-rotation**: Blender +Y → game −Z means the imported layout is a
+   rigidly rotated version of what the script's coordinates suggest (skyway ends
+   up at z=+78, not −78). Internally consistent because geometry, colliders and
+   markers all pass through the same transform — never mix old hardcoded game
+   coordinates with GLB-derived ones.
+4. Spawn yaw derivation: forward = (0,0,−1) via the empty's world quaternion,
+   `yaw = atan2(−f.x, −f.z)`.
+
+## Status / next steps
+
+- `hero-body.glb` (8 parts: body, glass, roof, 2 headlights, grille, 2 taillights)
+  + `hero-wheel.glb`, wired to the **muscle** archetype (HELLCAT). Verified in-game.
+- Remaining 7 archetypes still use the Kenney kit — same script can be
+  re-proportioned per archetype (wedge/truck/hearse) to replace them.

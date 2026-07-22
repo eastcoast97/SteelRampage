@@ -479,6 +479,43 @@ class Sfx {
       o.stop(t + i * 0.07 + 0.15);
     }
   }
+
+  /** streak announcer stinger — tier 1 (double) to 3 (unstoppable): stacked
+   *  power-fifth hits, more notes + lower root the bigger the streak */
+  announce(tier: number) {
+    if (!this.ctx || !this.master) return;
+    const t = this.ctx.currentTime;
+    const roots = [220, 196, 165];
+    const root = roots[Math.min(tier - 1, roots.length - 1)];
+    const hits = 1 + Math.min(tier, 3);
+    for (let i = 0; i < hits; i++) {
+      const when = t + i * 0.11;
+      for (const mult of [1, 1.5, 2]) {          // root + fifth + octave
+        const o = this.ctx.createOscillator();
+        o.type = 'sawtooth';
+        o.frequency.value = root * mult * (1 + i * 0.06);
+        const g = this.ctx.createGain();
+        g.gain.setValueAtTime(0.0001, when);
+        g.gain.exponentialRampToValueAtTime(0.09, when + 0.02);
+        g.gain.exponentialRampToValueAtTime(0.001, when + 0.22);
+        o.connect(g).connect(this.master);
+        o.start(when);
+        o.stop(when + 0.26);
+      }
+    }
+    // sub thump under the first hit
+    const sub = this.ctx.createOscillator();
+    sub.type = 'sine';
+    sub.frequency.setValueAtTime(90, t);
+    sub.frequency.exponentialRampToValueAtTime(38, t + 0.25);
+    const sg = this.ctx.createGain();
+    sg.gain.setValueAtTime(0.0001, t);
+    sg.gain.exponentialRampToValueAtTime(0.3, t + 0.02);
+    sg.gain.exponentialRampToValueAtTime(0.001, t + 0.3);
+    sub.connect(sg).connect(this.master);
+    sub.start(t);
+    sub.stop(t + 0.32);
+  }
 }
 
 export const sfx = new Sfx();

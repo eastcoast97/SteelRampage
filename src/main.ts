@@ -1,7 +1,13 @@
 import RAPIER from '@dimforge/rapier3d-compat';
 import * as THREE from 'three';
+import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
+import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
 import { Game, FIXED_DT, MODES, type GameMode, type RosterEntry } from './game/game';
 import { CAR_SPECS, BOT_NAMES, type CarSpec } from './game/specs';
+import { ARENAS, loadSurfaceTextures } from './game/arena';
+import { RGBELoader } from 'three/examples/jsm/loaders/RGBELoader.js';
 import { Input } from './core/input';
 import { loadCarModels } from './render/carModels';
 import { Hud } from './ui/hud';
@@ -19,7 +25,7 @@ const ENGINE_KIND: Record<CarSpec['build'], EngineKind> = {
 const $ = (id: string) => document.getElementById(id)!;
 
 async function boot() {
-  await Promise.all([RAPIER.init(), loadCarModels()]);
+  await Promise.all([RAPIER.init(), loadCarModels(), loadSurfaceTextures()]);
 
   const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
   renderer.setSize(window.innerWidth, window.innerHeight);
@@ -27,8 +33,77 @@ async function boot() {
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
-  renderer.toneMappingExposure = 1.45;
+  renderer.toneMappingExposure = 1.35;
   $('app').appendChild(renderer.domElement);
+
+  // --- post-processing: bloom makes neon / turbo / explosions / sun glow ---
+  const composer = new EffectComposer(renderer);
+  const renderPass = new RenderPass(new THREE.Scene(), new THREE.PerspectiveCamera());
+  const bloomPass = new UnrealBloomPass(
+    new THREE.Vector2(window.innerWidth, window.innerHeight),
+    0.62,   // strength
+    0.5,    // radius
+    0.88,   // threshold — only genuinely bright pixels bloom (lit windows,
+            // neon, turbo, explosions) — lower values blow out sunlit surfaces
+  );
+  composer.addPass(renderPass);
+  composer.addPass(bloomPass);
+  composer.addPass(new OutputPass());
+  composer.setSize(window.innerWidth, window.innerHeight);
+  composer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+
+  // --- reflection environment: real PBR reflections on metal + car paint ---
+  const pmrem = new THREE.PMREMGenerator(renderer);
+  pmrem.compileEquirectangularShader();
+  function buildEnv(top: string, hor: string): THREE.Texture {
+    const c = document.createElement('canvas');
+    c.width = 16; c.height = 128;
+    const g = c.getContext('2d')!;
+    const grad = g.createLinearGradient(0, 0, 0, 128);
+    grad.addColorStop(0, top);
+    grad.addColorStop(0.46, hor);
+    grad.addColorStop(0.54, hor);
+    grad.addColorStop(1, '#1a1a22');   // ground bounce
+    g.fillStyle = grad; g.fillRect(0, 0, 16, 128);
+    // bright horizon band → a specular highlight sweep across car paint & metal
+    const band = g.createLinearGradient(0, 56, 0, 72);
+    band.addColorStop(0, 'rgba(255,248,232,0)');
+    band.addColorStop(0.5, 'rgba(255,250,238,0.85)');
+    band.addColorStop(1, 'rgba(255,248,232,0)');
+    g.fillStyle = band; g.fillRect(0, 56, 16, 16);
+    const tex = new THREE.CanvasTexture(c);
+    tex.mapping = THREE.EquirectangularReflectionMapping;
+    const env = pmrem.fromEquirectangular(tex).texture;
+    tex.dispose();
+    return env;
+  }
+  // Poly Haven HDRI reflection environments (CC0): town sunset + docks night.
+  // Loaded lazily, PMREM'd once, cached; gradient env is the fallback.
+  const hdriEnvs: (THREE.Texture | null | 'loading')[] = [null, null];
+  const HDRI_FILES = ['/textures/town_env_1k.hdr', '/textures/docks_env_1k.hdr'];
+  const applyEnv = (g: Game) => {
+    const idx = g.arenaIdx ?? 0;
+    const cached = hdriEnvs[idx];
+    if (cached && cached !== 'loading') { g.scene.environment = cached; return; }
+    // gradient immediately (so there's never a frame without reflections)…
+    g.scene.environment = buildEnv(g.arena.envColors.top, g.arena.envColors.hor);
+    if (cached === 'loading') return;
+    hdriEnvs[idx] = 'loading';
+    new RGBELoader().load(HDRI_FILES[idx], (tex) => {
+      tex.mapping = THREE.EquirectangularReflectionMapping;
+      const env = pmrem.fromEquirectangular(tex).texture;
+      tex.dispose();
+      hdriEnvs[idx] = env;
+      // …upgraded to the real HDRI as soon as it's ready
+      if (game && (game.arenaIdx ?? 0) === idx) game.scene.environment = env;
+    }, undefined, () => { hdriEnvs[idx] = null; });
+  };
+
+  function renderComposed(scene: THREE.Scene, camera: THREE.Camera) {
+    renderPass.scene = scene;
+    renderPass.camera = camera;
+    composer.render();
+  }
 
   const input = new Input();
   const hud = new Hud();
@@ -63,6 +138,26 @@ async function boot() {
     });
     modeSelect.appendChild(card);
   }
+
+  // ---- arena select ----
+  let selectedArena = -1;   // -1 = random rotation
+  const arenaSelect = $('arena-select');
+  const arenaOptions = [
+    { idx: -1, name: 'RANDOM', desc: 'map rotation' },
+    ...ARENAS.map((a, i) => ({ idx: i, name: a.name, desc: a.desc })),
+  ];
+  for (const opt of arenaOptions) {
+    const card = document.createElement('div');
+    card.className = 'mode-card' + (opt.idx === selectedArena ? ' selected' : '');
+    card.innerHTML = `<h4>${opt.name}</h4><div class="mdesc">${opt.desc}</div>`;
+    card.addEventListener('click', () => {
+      selectedArena = opt.idx;
+      arenaSelect.querySelectorAll('.mode-card').forEach((c) => c.classList.remove('selected'));
+      card.classList.add('selected');
+    });
+    arenaSelect.appendChild(card);
+  }
+  const resolveArena = () => (selectedArena < 0 ? Math.floor(Math.random() * ARENAS.length) : selectedArena);
 
   // ---- car select ----
   const carSelect = $('car-select');
@@ -245,13 +340,15 @@ async function boot() {
       }
       idToIdx.clear();
       order.forEach((id, idx) => { if (id >= 0) idToIdx.set(id, idx); });
+      const arenaIdx = resolveArena();
       game = new Game(selectedSpec, hud, window.innerWidth / window.innerHeight, selectedMode,
-        { role: 'host', roster, playerIdx: 0 });
-      net.send({ t: 'start', roster, mode: selectedMode, skyIdx: game.arena.skyIdx, order });
+        { role: 'host', roster, playerIdx: 0 }, arenaIdx);
+      net.send({ t: 'start', roster, mode: selectedMode, skyIdx: game.arena.skyIdx, order, arena: arenaIdx });
     } else {
-      game = new Game(selectedSpec, hud, window.innerWidth / window.innerHeight, selectedMode);
+      game = new Game(selectedSpec, hud, window.innerWidth / window.innerHeight, selectedMode, null, resolveArena());
     }
 
+    applyEnv(game);
     sfx.setEngineProfile(ENGINE_KIND[game.player.spec.build]);
     game.onGameOver = (standings, playerWon, subtitle) => showGameOver(standings, playerWon, subtitle);
     (window as any).__game = game;
@@ -264,8 +361,9 @@ async function boot() {
     if (game) game.dispose(renderer);
     guestOverShown = false;
     game = new Game(CAR_SPECS[0], hud, window.innerWidth / window.innerHeight, m.mode,
-      { role: 'guest', roster: m.roster, playerIdx: m.myIdx, skyIdx: m.skyIdx });
+      { role: 'guest', roster: m.roster, playerIdx: m.myIdx, skyIdx: m.skyIdx }, m.arena ?? 0);
     guestSync = new GuestSync(game, m.myIdx);
+    applyEnv(game);
     sfx.setEngineProfile(ENGINE_KIND[game.player.spec.build]);
     (window as any).__guestSync = guestSync;
     (window as any).__game = game;
@@ -338,6 +436,8 @@ async function boot() {
 
   window.addEventListener('resize', () => {
     renderer.setSize(window.innerWidth, window.innerHeight);
+    composer.setSize(window.innerWidth, window.innerHeight);
+    bloomPass.resolution.set(window.innerWidth, window.innerHeight);
     if (game) {
       game.camera.aspect = window.innerWidth / window.innerHeight;
       game.camera.updateProjectionMatrix();
@@ -415,7 +515,7 @@ async function boot() {
       }
       guestSync?.update();
       game.render(rdt);
-      renderer.render(game.scene, game.camera);
+      renderComposed(game.scene, game.camera);
       return;
     }
 

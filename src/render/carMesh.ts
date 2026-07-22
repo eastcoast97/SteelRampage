@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import type { CarSpec } from '../game/specs';
-import { getCarModel, getTintedTexture } from './carModels';
+import { getCarModel, getTintedTexture, getWeatheredStockTexture } from './carModels';
 
 /** models whose stock paint IS their identity (police livery, ambulance, taxi) */
 const KEEP_STOCK_PAINT = new Set<CarSpec['build']>(['suv', 'ambulance', 'taxi']);
@@ -103,11 +103,20 @@ function buildFromModel(spec: CarSpec, model: { body: THREE.Group; wheel: THREE.
     const mesh = o as THREE.Mesh;
     if (!mesh.isMesh) return;
     const m = (mesh.material as THREE.MeshStandardMaterial).clone();
-    if (tinted) m.map = tinted;
+    // Kenney kit models are UV-mapped to a shared palette → retint that map.
+    // Custom Blender models have no map → just set the paint colour directly.
+    // Every palette gets the battle-wear pass (grime/rust/chips).
+    if (m.map) {
+      m.map = tinted ?? getWeatheredStockTexture() ?? m.map;
+    } else {
+      m.color = new THREE.Color(spec.color);
+    }
     // gritty, physically rigid metal read: scratch roughness + higher metalness
+    // + strong env reflections (the scene environment map is what sells car paint)
     m.roughnessMap = scratch;
-    m.roughness = 0.62;
-    m.metalness = 0.55;
+    m.roughness = 0.5;
+    m.metalness = 0.6;
+    m.envMapIntensity = 1.5;
     mesh.material = m;
   });
   let bbox = new THREE.Box3().setFromObject(body);
@@ -124,58 +133,129 @@ function buildFromModel(spec: CarSpec, model: { body: THREE.Group; wheel: THREE.
   const roofY = bbox.max.y;
   const hoodY = bbox.min.y + (bbox.max.y - bbox.min.y) * 0.62;
 
-  // --- roof-mounted machine gun (every car has one — it's the default weapon) ---
+  // ================= WEAPONIZATION KIT (Twisted-Metal-style) =================
+  const gunMetal = new THREE.MeshStandardMaterial({ color: 0x23212a, roughness: 0.55, metalness: 0.7 });
+  const rustMat = new THREE.MeshStandardMaterial({ color: 0x4a3a2c, roughness: 0.9, metalness: 0.25 });
+  const lampMat = new THREE.MeshStandardMaterial({ color: 0xffe9b8, emissive: 0xffc866, emissiveIntensity: 1.6 });
+  const tailMat = new THREE.MeshStandardMaterial({ color: 0x7a0f0f, emissive: 0xff1a10, emissiveIntensity: 1.1, roughness: 0.35 });
+
+  const box = (w: number, h: number, d: number, m: THREE.Material, x: number, y: number, z: number, rx = 0, ry = 0, rz = 0) => {
+    const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), m);
+    mesh.position.set(x, y, z);
+    mesh.rotation.set(rx, ry, rz);
+    mesh.castShadow = true;
+    group.add(mesh);
+    return mesh;
+  };
+  const tube = (r: number, len: number, m: THREE.Material, x: number, y: number, z: number, alongZ = true, seg = 8) => {
+    const mesh = new THREE.Mesh(new THREE.CylinderGeometry(r, r, len, seg), m);
+    if (alongZ) mesh.rotation.x = Math.PI / 2;
+    mesh.position.set(x, y, z);
+    mesh.castShadow = true;
+    group.add(mesh);
+    return mesh;
+  };
+
+  // --- roof MG: armored housing + twin barrels with muzzle brakes + ammo box ---
   const gunZ = sz * 0.18;
-  const gunBase = new THREE.Mesh(new THREE.BoxGeometry(0.38, 0.26, 0.38), darkMat);
-  gunBase.position.set(0, roofY + 0.1, gunZ);
-  gunBase.castShadow = true;
-  group.add(gunBase);
-  for (const off of [-0.07, 0.07]) {
-    const b = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.045, sz * 0.95, 6), steelMat);
-    b.rotation.x = Math.PI / 2;
-    b.position.set(off, roofY + 0.2, gunZ - sz * 0.48);
-    group.add(b);
+  box(0.46, 0.3, 0.5, gunMetal, 0, roofY + 0.12, gunZ);
+  box(0.3, 0.1, 0.34, darkMat, 0, roofY + 0.32, gunZ);                       // sight block
+  box(0.34, 0.22, 0.26, rustMat, 0.28, roofY + 0.1, gunZ + 0.1);            // ammo box
+  for (const off of [-0.08, 0.08]) {
+    tube(0.045, sz * 0.95, steelMat, off, roofY + 0.2, gunZ - sz * 0.48);
+    tube(0.07, 0.14, gunMetal, off, roofY + 0.2, gunZ - sz * 0.95);         // muzzle brake
   }
 
-  // --- per-archetype combat gear ---
-  if (spec.build === 'muscle') {
+  // --- universal detailing: whip antennas, taillight strip, plate, skirts ---
+  tube(0.015, 0.9, darkMat, -sx * 0.7, roofY + 0.35, sz * 0.82, false, 5);
+  tube(0.015, 0.62, darkMat, sx * 0.74, roofY + 0.22, sz * 0.85, false, 5);
+  for (const side of [-1, 1]) {
+    box(sx * 0.52, 0.09, 0.05, tailMat, side * sx * 0.42, hoodY - 0.05, sz + 0.16);   // taillight strips
+  }
+  box(0.36, 0.15, 0.03, new THREE.MeshStandardMaterial({ color: 0xd8d4c4, roughness: 0.6 }),
+    0, hoodY - 0.18, sz + 0.17);                                                       // license plate
+  for (const side of [-1, 1]) {
+    box(0.1, 0.18, sz * 1.15, darkMat, side * (sx * 0.98), -sy + 0.1, 0);              // side armor skirts
+  }
+
+  // --- shared builders ---
+  const gatling = (x: number, y: number, z: number, s = 1) => {
+    box(0.5 * s, 0.16, 0.5 * s, gunMetal, x, y, z);                    // base ring
+    box(0.3 * s, 0.3, 0.36 * s, darkMat, x, y + 0.2, z);               // pivot block
+    const drum = tube(0.13 * s, 0.5, gunMetal, x, y + 0.28, z - 0.4 * s);
+    drum.castShadow = true;
+    for (let i = 0; i < 6; i++) {
+      const a = (i / 6) * Math.PI * 2;
+      tube(0.032, 0.9, steelMat, x + Math.cos(a) * 0.08 * s, y + 0.28 + Math.sin(a) * 0.08 * s, z - 0.9 * s, true, 6);
+    }
+    box(0.24 * s, 0.2, 0.3 * s, rustMat, x + 0.3 * s, y + 0.1, z + 0.14);   // side ammo drum
+  };
+  const lightRack = (y: number, z: number, w: number, colors = [0xffe9b8, 0xffe9b8, 0xffe9b8, 0xffe9b8]) => {
+    box(w, 0.09, 0.1, darkMat, 0, y, z);
+    colors.forEach((c, i) => {
+      const lm = new THREE.MeshStandardMaterial({ color: c, emissive: c, emissiveIntensity: 1.6 });
+      box(0.14, 0.12, 0.12, lm, -w / 2 + 0.12 + (i * (w - 0.24)) / (colors.length - 1), y + 0.1, z);
+    });
+  };
+  const windowBars = (z: number, w: number, yLo: number, yHi: number, tilt = 0) => {
+    const n = 4;
+    for (let i = 0; i < n; i++) {
+      const x = -w / 2 + (i * w) / (n - 1);
+      box(0.045, yHi - yLo, 0.045, darkMat, x, (yLo + yHi) / 2, z, tilt, 0, 0);
+    }
+    box(w + 0.1, 0.05, 0.05, darkMat, 0, yHi, z, tilt, 0, 0);
+  };
+  const exhaustStacks = () => {
     for (const side of [-1, 1]) {
-      const pod = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.26, 0.9), darkMat);
-      pod.position.set(side * sx * 0.5, hoodY + 0.05, -sz * 0.5);
-      pod.castShadow = true;
-      group.add(pod);
+      tube(0.075, sy * 1.6, steelMat, side * sx * 0.78, roofY - 0.35, sz * 0.55, false, 8);
+      tube(0.09, 0.16, darkMat, side * sx * 0.78, roofY + 0.45, sz * 0.55, false, 8);
+    }
+  };
+  const plowBlade = (bigger = false) => {
+    const w = sx * (bigger ? 2.5 : 2.1), h = bigger ? 1.0 : 0.6;
+    const blade = box(w, h, 0.14, steelMat, 0, -sy + h * 0.55, -sz - 0.16, -0.48);
+    blade.castShadow = true;
+    for (let i = 0; i < 5; i++) {                                        // vertical ribs
+      box(0.07, h * 0.95, 0.06, rustMat, -w / 2 + 0.2 + (i * (w - 0.4)) / 4, -sy + h * 0.55, -sz - 0.24, -0.48);
+    }
+    for (const side of [-1, 1]) {                                        // angled wings
+      box(0.6, h * 0.85, 0.12, steelMat, side * (w / 2 + 0.22), -sy + h * 0.5, -sz + 0.08, -0.48, side * 0.55);
+    }
+  };
+
+  // --- per-archetype loadouts ---
+  if (spec.build === 'muscle') {
+    for (const side of [-1, 1]) {                                        // hood minigun pods
+      box(0.32, 0.28, 0.95, gunMetal, side * sx * 0.5, hoodY + 0.05, -sz * 0.5);
       for (const off of [-0.06, 0.06]) {
-        const mg = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.045, 1.3, 6), steelMat);
-        mg.rotation.x = Math.PI / 2;
-        mg.position.set(side * sx * 0.5 + off, hoodY + 0.1, -sz * 0.9);
-        group.add(mg);
+        tube(0.045, 1.3, steelMat, side * sx * 0.5 + off, hoodY + 0.1, -sz * 0.9);
+        tube(0.065, 0.12, gunMetal, side * sx * 0.5 + off, hoodY + 0.1, -sz * 1.28);
       }
     }
+    windowBars(sz * 0.62, sx * 1.1, hoodY + 0.05, roofY - 0.05, 0.35);   // rear glass armor
+    box(sx * 1.5, 0.1, 0.34, darkMat, 0, roofY + 0.02, sz * 0.55);      // trunk spoiler
+  } else if (spec.build === 'speed') {
+    box(sx * 1.7, 0.28, 0.09, steelMat, 0, -sy + 0.4, -sz - 0.12, -0.3); // low bull bar
+    for (const side of [-1, 1]) tube(0.06, 0.8, gunMetal, side * sx * 0.55, hoodY, -sz * 0.72);
   } else if (spec.build === 'sports') {
-    for (const side of [-1, 1]) {
-      const gun = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.1, 0.9, 6), darkMat);
-      gun.rotation.x = Math.PI / 2;
-      gun.position.set(side * sx * 0.55, hoodY, -sz * 0.7);
-      gun.castShadow = true;
-      group.add(gun);
+    for (const side of [-1, 1]) {                                        // flame tanks + nozzles
+      const tank = tube(0.16, 0.9, rustMat, side * sx * 0.55, roofY - 0.12, sz * 0.5, true, 10);
+      tank.rotation.z = side * 0.12;
+      tube(0.05, 0.5, gunMetal, side * sx * 0.5, hoodY + 0.02, -sz * 0.8);
+      tube(0.075, 0.1, darkMat, side * sx * 0.5, hoodY + 0.02, -sz * 1.03);
     }
+  } else if (spec.build === 'suv') {
+    gatling(0, roofY + 0.08, -sz * 0.05, 1.1);                           // RAMPART auto-turret
+    lightRack(roofY + 0.16, sz * 0.55, sx * 1.3, [0xff3030, 0xffe9b8, 0xffe9b8, 0x3060ff]);
+    plowBlade(false);
   } else if (spec.build === 'tank') {
-    const plow = new THREE.Mesh(new THREE.BoxGeometry(sx * 2.4, 0.95, 0.16), steelMat);
-    plow.rotation.x = -0.5;
-    plow.position.set(0, -sy + 0.55, -sz - 0.15);
-    plow.castShadow = true;
-    group.add(plow);
-    for (const side of [-1, 1]) {
-      const wing = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.8, 0.16), steelMat);
-      wing.rotation.set(-0.5, side * 0.5, 0);
-      wing.position.set(side * sx * 1.1, -sy + 0.5, -sz + 0.15);
-      group.add(wing);
-    }
+    plowBlade(true);
+    exhaustStacks();
+    windowBars(-sz * 0.42, sx * 1.2, hoodY + 0.15, roofY - 0.02, -0.25); // windshield cage
+    lightRack(roofY + 0.12, -sz * 0.32, sx * 1.4);
   } else if (spec.build === 'hearse') {
-    const rail = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.1, 1.5), darkMat);
-    rail.position.set(0, roofY + 0.06, sz * 0.35);
-    group.add(rail);
-    const bomb = new THREE.Mesh(new THREE.SphereGeometry(0.26, 10, 8), darkMat);
+    box(0.5, 0.1, 1.5, darkMat, 0, roofY + 0.06, sz * 0.35);            // bomb cradle
+    const bomb = new THREE.Mesh(new THREE.SphereGeometry(0.26, 10, 8), gunMetal);
     bomb.position.set(0, roofY + 0.3, sz * 0.35);
     bomb.castShadow = true;
     group.add(bomb);
@@ -185,7 +265,18 @@ function buildFromModel(spec: CarSpec, model: { body: THREE.Group; wheel: THREE.
     );
     fuse.position.set(0, roofY + 0.56, sz * 0.35);
     group.add(fuse);
+    exhaustStacks();
+    windowBars(sz * 0.9, sx * 1.0, hoodY - 0.05, roofY - 0.15);          // rear door bars
+  } else if (spec.build === 'ambulance') {
+    lightRack(roofY + 0.1, -sz * 0.25, sx * 1.35, [0xff3030, 0xffffff, 0xffffff, 0x3060ff]);
+    box(sx * 1.6, 0.3, 0.1, steelMat, 0, -sy + 0.42, -sz - 0.12, -0.35); // bull bar
+  } else if (spec.build === 'taxi') {
+    box(0.7, 0.22, 0.34, rustMat, 0, roofY + 0.12, sz * 0.5);            // rear mine dispenser
+    box(0.5, 0.1, 0.1, darkMat, 0, hoodY - 0.1, sz + 0.2);               // drop chute
   }
+
+  // --- wheel hub spikes (the TM signature) — skip the civic-liveried builds ---
+  const spikey = !['ambulance', 'taxi'].includes(spec.build);
 
   // --- wheels from the kit, mounted on our steer/spin rig ---
   const wheels: THREE.Object3D[] = [];
@@ -212,6 +303,17 @@ function buildFromModel(spec: CarSpec, model: { body: THREE.Group; wheel: THREE.
     const isRight = i % 2 === 1;
     if (isRight) mesh.scale.x *= -1; // mirror for the right side
     spinner.add(mesh);
+    // hub spike — spins with the wheel (the Twisted Metal signature).
+    // Dull alloy, NOT steelMat: a mirror cone catches the sun as a white
+    // bloom flare that reads as a headlight glitch.
+    const spikeMat = new THREE.MeshStandardMaterial({ color: 0x6a655c, roughness: 0.55, metalness: 0.5 });
+    if (spikey) {
+      const spike = new THREE.Mesh(new THREE.ConeGeometry(0.1, 0.34, 8), spikeMat);
+      spike.rotation.z = isRight ? -Math.PI / 2 : Math.PI / 2;
+      spike.position.x = (isRight ? 1 : -1) * 0.2;
+      spike.castShadow = true;
+      spinner.add(spike);
+    }
     pivot.add(spinner);
     group.add(pivot);
     wheels.push(pivot);

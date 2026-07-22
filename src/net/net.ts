@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import type { Game } from '../game/game';
 import { sfx } from '../audio/sfx';
-import { PICKUP_COLORS } from '../game/pickups';
+import { PICKUP_COLORS, PICKUP_TYPE_ORDER } from '../game/pickups';
 
 /** Host-authoritative netcode: the host's browser runs the real sim; guests
  *  send inputs and render interpolated snapshots. A tiny relay server
@@ -77,7 +77,7 @@ export function serializeSnapshot(g: Game): any {
       Math.round(v.specialEnergy * 100), r1(v.shieldTime), Math.round(v.lockProgress * 100),
       v.lockTarget ? g.vehicles.indexOf(v.lockTarget) : -1,
       v.missiles, v.minesAmmo, r1(v.turboMeter), v.lives,
-      r1(v.specialActiveTime),
+      r1(v.specialActiveTime), v.killStreak,
     ];
   });
   const mis = g.missiles.filter((m) => !m.dead).map((m) => [r1(m.pos.x), r1(m.pos.y), r1(m.pos.z), r1(m.vel.x), r1(m.vel.y), r1(m.vel.z)]);
@@ -89,12 +89,20 @@ export function serializeSnapshot(g: Game): any {
     const q = b.body.rotation();
     return [r1(t.x), r1(t.y), r1(t.z), r2(q.x), r2(q.y), r2(q.z), r2(q.w)];
   });
-  const pk = (g.pickups as any)['pickups'].map((p: any) => (p.active ? [1, r1(p.pos.x), r1(p.pos.y), r1(p.pos.z)] : [0, r1(p.pos.x), r1(p.pos.y), r1(p.pos.z)]));
+  const pk = (g.pickups as any)['pickups'].map((p: any) =>
+    [p.active ? 1 : 0, r1(p.pos.x), r1(p.pos.y), r1(p.pos.z), PICKUP_TYPE_ORDER.indexOf(p.type)]);
   const ped: number[] = [];
   for (const p of (g.peds as any)['peds']) ped.push(r1(p.pos.x), r1(p.pos.z), p.state === 'dead' ? 0 : 1);
   const ev = g.netEvents;
   g.netEvents = [];
-  return { st: [g.state === 'over' ? 1 : 0, r1(g.timeLeft)], veh, mis, mns, bmb, brl, pk, ped, ev };
+  return {
+    st: [
+      g.state === 'over' ? 1 : 0, r1(g.timeLeft),
+      g.bountyTarget ? g.vehicles.indexOf(g.bountyTarget) : -1,
+      g.suddenDeathR === Infinity ? -1 : Math.round(g.suddenDeathR),
+    ],
+    veh, mis, mns, bmb, brl, pk, ped, ev,
+  };
 }
 
 // ---------------------------------------------------------------- guest sync
@@ -212,6 +220,21 @@ export class GuestSync {
         g.effects.shockwave(new THREE.Vector3(e.x, e.y, e.z));
       } else if (e.k === 'kill') {
         g.hud.addKillFeed(e.a, e.v);
+      } else if (e.k === 'ann') {
+        // announcer: toast + stinger for the subject (vi === -1 → everyone)
+        if (e.vi === this.myIdx || e.vi === -1) { g.hud.toast(e.t, e.vi === -1 ? '#ff4444' : '#ffd24a'); sfx.announce(e.tier ?? 1); }
+        else g.hud.addKillFeed('⚡', e.feed ?? `${g.vehicles[e.vi]?.name ?? '?'} — ${e.t}`);
+      } else if (e.k === 'twr') {
+        if (e.s === 'warn') {
+          (g as any).towerState = 'warning';
+          if (typeof e.dx === 'number') (g as any).towerDir.set(e.dx, 0, e.dz);
+          g.hud.toast('THE CLOCK TOWER IS COMING DOWN', '#ff4444');
+          sfx.announce(3);
+          g.effects.trauma = 1;
+        } else if (e.s === 'fall') {
+          (g as any).towerState = 'falling';
+          (g as any).towerFallT = 0;
+        }
       } else if (e.k === 'pick' && e.vi === this.myIdx) {
         sfx.pickup();
         const toasts: Record<string, [string, string]> = {
@@ -262,6 +285,7 @@ export class GuestSync {
       v.turboMeter = a[19];
       v.lives = a[20];
       v.specialActiveTime = a[21];
+      v.killStreak = a[22] ?? 0;
       v.eliminated = !!(flags & 16);
       v.overdriveTime = flags & 32 ? 1 : 0;
       v.drifting = !!(flags & 64);
@@ -295,10 +319,14 @@ export class GuestSync {
         barrel.mesh.quaternion.set(b[3], b[4], b[5], b[6]);
       }
     });
-    // pickups (roaming ones move — position comes with the flag)
+    // bounty target + sudden-death radius from snapshot header
+    (g as any).bountyTarget = s.st[2] >= 0 ? g.vehicles[s.st[2]] ?? null : null;
+    (g as any).suddenDeathR = (s.st[3] ?? -1) > 0 ? s.st[3] : Infinity;
+    // pickups (roaming ones move; types shuffle — both come with the flag)
     (g.pickups as any)['pickups'].forEach((p: any, i: number) => {
       const a = s.pk[i];
       if (!a) return;
+      if (typeof a[4] === 'number' && a[4] >= 0) (g.pickups as any).setTypeByIndex(i, a[4]);
       p.active = a[0] === 1;
       p.pos.set(a[1], a[2], a[3]);
       p.mesh.position.set(a[1], a[2], a[3]);

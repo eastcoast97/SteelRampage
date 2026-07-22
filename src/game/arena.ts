@@ -2,11 +2,96 @@ import RAPIER from '@dimforge/rapier3d-compat';
 import * as THREE from 'three';
 import type { PickupType } from './pickups';
 import type { PedZone } from './peds';
+import { getArenaBuilding, getArenaScene } from '../render/carModels';
 
-/** "Overdrive City" — 240×240, ring highway + boulevards, anti-snag props.
- *  Scale ratios (vehicle width 2m): boulevards 18m (9×), ring 20m (10×),
- *  block alleys ≥13m (6.5×). See docs/LEVEL-DESIGN.md. */
-export const ARENA_HALF = 120;
+/** Arena 4.0 "Sunbaked Junction" — 320×320 organic town, modelled on classic
+ *  Twisted Metal small-town maps: central ROUNDABOUT with a clock tower,
+ *  diagonal MAIN AVENUE that runs straight through the two neon tunnels,
+ *  a perpendicular cross avenue, connector streets, and a rounded-rectangle
+ *  PERIMETER LOOP with arc corners. Irregular blocks, warm sun-baked palette.
+ *  Layout constants here MUST match the Blender arena generator (docs/BLENDER.md). */
+export const ARENA_HALF = 160;
+
+/** Poly Haven CC0 photoscans (public/textures/) — loaded at bootstrap; the
+ *  canvas texture builders composite markings/wear ON TOP of these bases and
+ *  fall back to pure-procedural when absent. */
+export const SURFACE_IMAGES: {
+  asphaltDiff?: HTMLImageElement;
+  asphaltRough?: HTMLImageElement;
+  concreteDiff?: HTMLImageElement;
+} = {};
+
+export async function loadSurfaceTextures(): Promise<void> {
+  const load = (src: string) => new Promise<HTMLImageElement | undefined>((resolve) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => resolve(undefined);
+    img.src = src;
+  });
+  const [ad, ar, cd] = await Promise.all([
+    load('/textures/asphalt_01_diff_1k.jpg'),
+    load('/textures/asphalt_01_rough_1k.jpg'),
+    load('/textures/concrete_floor_diff_1k.jpg'),
+  ]);
+  SURFACE_IMAGES.asphaltDiff = ad;
+  SURFACE_IMAGES.asphaltRough = ar;
+  SURFACE_IMAGES.concreteDiff = cd;
+}
+
+export const ARENAS = [
+  { name: 'SUNBAKED JUNCTION', desc: 'small-town roundabout, tunnels, skyway' },
+  { name: 'NEON DOCKS', desc: 'night harbor — warehouses, cranes, containers' },
+];
+
+/** street segments [x0,z0,x1,z1,width] — single source of truth, also drawn
+ *  on the radar. Diagonal avenues stop at the roundabout (r=22). */
+export const STREETS: [number, number, number, number, number][] = [
+  // main avenue, (1,-1) diagonal — passes through both neon tunnels
+  [-126, 126, -15.6, 15.6, 18],
+  [15.6, -15.6, 126, -126, 18],
+  // cross avenue, (1,1) diagonal
+  [-126, -126, -15.6, -15.6, 14],
+  [15.6, 15.6, 126, 126, 14],
+  // perimeter loop straights
+  [-108, -138, 108, -138, 14],
+  [-108, 138, 108, 138, 14],
+  [138, -108, 138, 108, 14],
+  [-138, -108, -138, 108, 14],
+  // connector streets (x=±88, z=±88) — placed to thread between the tunnel
+  // portals (≤69) and the skyway pylons (77)
+  [88, -138, 88, 138, 12],
+  [-88, -138, -88, 138, 12],
+  [-138, 88, 138, 88, 12],
+  [-138, -88, 138, -88, 12],
+];
+/** perimeter corner arcs [cx,cz,r,thetaStart,thetaLen,width] */
+export const ARCS: [number, number, number, number, number, number][] = [
+  [108, -108, 30, -Math.PI / 2, Math.PI / 2, 14],   // NE
+  [108, 108, 30, 0, Math.PI / 2, 14],               // SE
+  [-108, 108, 30, Math.PI / 2, Math.PI / 2, 14],    // SW
+  [-108, -108, 30, Math.PI, Math.PI / 2, 14],       // NW
+];
+export const ROUNDABOUT = { r: 22, w: 13, islandR: 15.5 };
+
+/** NEON DOCKS street grid: harbor road east, main drag, service road west,
+ *  three crossing avenues, perimeter edges. */
+export const STREETS_DOCKS: [number, number, number, number, number][] = [
+  [118, -138, 118, 138, 16],    // harbor road (along the waterfront)
+  [-30, -138, -30, 138, 14],    // main drag
+  [-118, -138, -118, 138, 12],  // west service road
+  [-138, -90, 138, -90, 14],    // north avenue
+  [-138, 0, 138, 0, 14],        // centre avenue
+  [-138, 90, 138, 90, 14],      // south avenue
+  [-138, -138, 138, -138, 12],  // north perimeter
+  [-138, 138, 138, 138, 12],    // south perimeter
+];
+/** junction pad list per arena [x,z,size] */
+export const JUNCTIONS_DOCKS: [number, number, number][] = [
+  [118, -90, 20], [118, 0, 20], [118, 90, 20],
+  [-30, -90, 18], [-30, 0, 18], [-30, 90, 18],
+  [-118, -90, 16], [-118, 0, 16], [-118, 90, 16],
+  [118, -138, 18], [118, 138, 18], [-30, -138, 16], [-30, 138, 16], [-118, -138, 14], [-118, 138, 14],
+];
 
 export interface ArenaData {
   spawnPoints: { pos: THREE.Vector3; yaw: number }[];
@@ -15,8 +100,14 @@ export interface ArenaData {
   pedZones: PedZone[];
   /** which SKY_PRESETS entry was used — hosts share it so guests match */
   skyIdx: number;
+  /** sky gradient colors — used to build the reflection environment map */
+  envColors: { top: string; hor: string };
   /** auto-turbo strips (y = surface height so pads work on elevated track) */
   boostPads: { x: number; y: number; z: number; hx: number; hz: number }[];
+  /** gas pumps — shootable super-barrels (bigger blast, chains the cluster) */
+  pumpPoints: THREE.Vector3[];
+  /** the clock tower's collider body — removed when the tower collapses */
+  towerBody?: RAPIER.RigidBody;
 }
 
 // ---------------------------------------------------------------- helpers
@@ -39,6 +130,177 @@ function addBox(
   mesh.castShadow = castShadow;
   mesh.receiveShadow = true;
   scene.add(mesh);
+}
+
+/**
+ * Place a Blender-authored asset. Meshes named `COL_*` are collision proxies:
+ * they become Rapier cuboid colliders and are NOT rendered. Everything else is
+ * rendered. This is what lets the arena be authored in Blender while we keep
+ * exact control of the physics footprint (see docs/BLENDER.md).
+ */
+function placeBlenderAsset(
+  world: RAPIER.World, scene: THREE.Scene, src: THREE.Group,
+  cx: number, cz: number, yaw = 0, scale = 1,
+): void {
+  const root = src.clone(true);
+  root.position.set(cx, 0, cz);
+  root.rotation.y = yaw;
+  root.scale.setScalar(scale);
+  root.updateWorldMatrix(true, true);
+
+  const proxies: THREE.Mesh[] = [];
+  root.traverse((o) => {
+    const mesh = o as THREE.Mesh;
+    if (!mesh.isMesh) return;
+    if (o.name.startsWith('COL_')) { proxies.push(mesh); return; }
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+  });
+
+  const pos = new THREE.Vector3(), quat = new THREE.Quaternion(), scl = new THREE.Vector3();
+  for (const p of proxies) {
+    p.updateWorldMatrix(true, false);
+    p.matrixWorld.decompose(pos, quat, scl);
+    p.geometry.computeBoundingBox();
+    const bb = p.geometry.boundingBox!;
+    // half-extents in world units
+    const hx = ((bb.max.x - bb.min.x) / 2) * Math.abs(scl.x);
+    const hy = ((bb.max.y - bb.min.y) / 2) * Math.abs(scl.y);
+    const hz = ((bb.max.z - bb.min.z) / 2) * Math.abs(scl.z);
+    // geometry may not be centred on its origin — offset into world space
+    const ctr = new THREE.Vector3(
+      (bb.max.x + bb.min.x) / 2, (bb.max.y + bb.min.y) / 2, (bb.max.z + bb.min.z) / 2,
+    ).multiply(scl).applyQuaternion(quat).add(pos);
+    const body = world.createRigidBody(
+      RAPIER.RigidBodyDesc.fixed()
+        .setTranslation(ctr.x, ctr.y, ctr.z)
+        .setRotation({ x: quat.x, y: quat.y, z: quat.z, w: quat.w }),
+    );
+    world.createCollider(RAPIER.ColliderDesc.cuboid(hx, hy, hz).setFriction(0.6), body);
+    p.parent?.remove(p);   // proxy is physics-only
+  }
+  scene.add(root);
+}
+
+/** Make a Rapier cuboid from a collision-proxy mesh's world transform.
+ *  Handles rotation (ramps, skyway segments) and off-origin geometry. */
+function colliderFromProxy(world: RAPIER.World, p: THREE.Mesh): RAPIER.RigidBody {
+  const pos = new THREE.Vector3(), quat = new THREE.Quaternion(), scl = new THREE.Vector3();
+  p.updateWorldMatrix(true, false);
+  p.matrixWorld.decompose(pos, quat, scl);
+  p.geometry.computeBoundingBox();
+  const bb = p.geometry.boundingBox!;
+  const hx = ((bb.max.x - bb.min.x) / 2) * Math.abs(scl.x);
+  const hy = ((bb.max.y - bb.min.y) / 2) * Math.abs(scl.y);
+  const hz = ((bb.max.z - bb.min.z) / 2) * Math.abs(scl.z);
+  const ctr = new THREE.Vector3(
+    (bb.max.x + bb.min.x) / 2, (bb.max.y + bb.min.y) / 2, (bb.max.z + bb.min.z) / 2,
+  ).multiply(scl).applyQuaternion(quat).add(pos);
+  const body = world.createRigidBody(
+    RAPIER.RigidBodyDesc.fixed()
+      .setTranslation(ctr.x, ctr.y, ctr.z)
+      .setRotation({ x: quat.x, y: quat.y, z: quat.z, w: quat.w }),
+  );
+  world.createCollider(RAPIER.ColliderDesc.cuboid(hx, hy, hz).setFriction(0.6), body);
+  return body;
+}
+
+/**
+ * Consume the complete Blender-authored arena (public/models/arena.glb).
+ * Object-name prefixes route each node (docs/BLENDER.md):
+ *   COL_*      → Rapier cuboid collider, stripped from render
+ *   SPAWN_*    → spawn point (yaw derived from the empty's orientation)
+ *   PICKUP_t_* → pickup socket of type t
+ *   BARREL_*   → explosive barrel spawn
+ *   BOOST_*    → boost pad zone (box → x/z extents + surface height)
+ *   PED_*      → pedestrian zone rectangle
+ *   (rest)     → rendered geometry
+ * NOTE: the glTF axis convention imports the Blender layout rigidly rotated
+ * (Blender +Y → -Z). That's fine BECAUSE everything — geometry, colliders and
+ * markers — comes through the same transform. Never mix old hardcoded
+ * coordinates with GLB-derived ones.
+ */
+function consumeArenaGLB(
+  world: RAPIER.World, scene: THREE.Scene, src: THREE.Group,
+): Pick<ArenaData, 'spawnPoints' | 'pickupPoints' | 'barrelPoints' | 'pedZones' | 'boostPads' | 'pumpPoints' | 'towerBody'> {
+  const root = src.clone(true);
+  root.updateWorldMatrix(true, true);
+
+  const spawnPoints: ArenaData['spawnPoints'] = [];
+  const pickupPoints: ArenaData['pickupPoints'] = [];
+  const barrelPoints: ArenaData['barrelPoints'] = [];
+  const pedZones: PedZone[] = [];
+  const boostPads: ArenaData['boostPads'] = [];
+  const pumpPoints: THREE.Vector3[] = [];
+  let towerBody: RAPIER.RigidBody | undefined;
+  const strip: THREE.Object3D[] = [];
+  const wp = new THREE.Vector3(), wq = new THREE.Quaternion(), ws = new THREE.Vector3();
+
+  const rectOf = (m: THREE.Mesh) => {
+    // NOTE: the exporter bakes transforms into vertex data (export_apply), so
+    // marker positions must come from the geometry bounding-box CENTRE, not
+    // the node transform (which is identity).
+    m.updateWorldMatrix(true, false);
+    m.matrixWorld.decompose(wp, wq, ws);
+    m.geometry.computeBoundingBox();
+    const bb = m.geometry.boundingBox!;
+    const ctr = new THREE.Vector3(
+      (bb.max.x + bb.min.x) / 2, (bb.max.y + bb.min.y) / 2, (bb.max.z + bb.min.z) / 2,
+    ).multiply(ws).applyQuaternion(wq).add(wp);
+    return {
+      x: ctr.x, y: ctr.y, z: ctr.z,
+      hx: ((bb.max.x - bb.min.x) / 2) * Math.abs(ws.x),
+      hz: ((bb.max.z - bb.min.z) / 2) * Math.abs(ws.z),
+    };
+  };
+
+  root.traverse((o) => {
+    const n = o.name;
+    if (n.startsWith('COL_')) {
+      const body = colliderFromProxy(world, o as THREE.Mesh);
+      if (n === 'COL_ClockTower') towerBody = body;   // removable on collapse
+      strip.push(o);
+    } else if (n.startsWith('PUMP_')) {
+      o.getWorldPosition(wp);
+      pumpPoints.push(new THREE.Vector3(wp.x, 0.95, wp.z));
+      strip.push(o);
+    } else if (n.startsWith('SPAWN_')) {
+      o.getWorldPosition(wp);
+      o.getWorldQuaternion(wq);
+      const f = new THREE.Vector3(0, 0, -1).applyQuaternion(wq);
+      spawnPoints.push({ pos: new THREE.Vector3(wp.x, 1.2, wp.z), yaw: Math.atan2(-f.x, -f.z) });
+      strip.push(o);
+    } else if (n.startsWith('PICKUP_')) {
+      const type = n.split('_')[1] as PickupType;
+      o.getWorldPosition(wp);
+      const pos = wp.clone();
+      if (type === 'overdrive') {
+        // overdrive roams: clock-tower island socket + two shop plazas
+        pickupPoints.push({ pos, type, alts: [pos.clone(), new THREE.Vector3(44, 0.9, 0), new THREE.Vector3(0, 0.9, 44)] });
+      } else {
+        pickupPoints.push({ pos, type });
+      }
+      strip.push(o);
+    } else if (n.startsWith('BARREL_')) {
+      o.getWorldPosition(wp);
+      barrelPoints.push(new THREE.Vector3(wp.x, 0.95, wp.z));
+      strip.push(o);
+    } else if (n.startsWith('BOOST_')) {
+      const r = rectOf(o as THREE.Mesh);
+      boostPads.push({ x: r.x, y: Math.max(0, r.y - 0.09), z: r.z, hx: r.hx, hz: r.hz });
+      strip.push(o);
+    } else if (n.startsWith('PED_')) {
+      const r = rectOf(o as THREE.Mesh);
+      pedZones.push({ x: r.x, z: r.z, hx: r.hx, hz: r.hz });
+      strip.push(o);
+    } else if ((o as THREE.Mesh).isMesh) {
+      (o as THREE.Mesh).castShadow = true;
+      (o as THREE.Mesh).receiveShadow = true;
+    }
+  });
+  for (const o of strip) o.parent?.remove(o);
+  scene.add(root);
+  return { spawnPoints, pickupPoints, barrelPoints, pedZones, boostPads, pumpPoints, towerBody };
 }
 
 /** anti-snag prop: rounded collider at ~92% of the visual footprint so
@@ -113,10 +375,19 @@ function makeGroundTexture(): THREE.CanvasTexture {
   const c = document.createElement('canvas');
   c.width = c.height = 512;
   const g = c.getContext('2d')!;
-  g.fillStyle = '#5e5760';
-  g.fillRect(0, 0, 512, 512);
+  if (SURFACE_IMAGES.concreteDiff) {
+    // Poly Haven photoscan base, graded warm to match the sun-baked palette
+    g.drawImage(SURFACE_IMAGES.concreteDiff, 0, 0, 512, 512);
+    g.globalCompositeOperation = 'multiply';
+    g.fillStyle = '#b8a68e';
+    g.fillRect(0, 0, 512, 512);
+    g.globalCompositeOperation = 'source-over';
+  } else {
+    g.fillStyle = '#6a6157';   // warm sun-baked concrete
+    g.fillRect(0, 0, 512, 512);
+  }
   for (let i = 0; i < 300; i++) {
-    g.fillStyle = `rgba(${70 + Math.random() * 40}, ${62 + Math.random() * 34}, ${66 + Math.random() * 36}, 0.3)`;
+    g.fillStyle = `rgba(${86 + Math.random() * 40}, ${74 + Math.random() * 34}, ${60 + Math.random() * 30}, 0.3)`;
     const s = 10 + Math.random() * 50;
     g.fillRect(Math.random() * 512, Math.random() * 512, s, s);
   }
@@ -139,36 +410,213 @@ function makeGroundTexture(): THREE.CanvasTexture {
   }
   const tex = new THREE.CanvasTexture(c);
   tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
-  tex.repeat.set(15, 15);
+  tex.repeat.set(20, 20);   // 320m arena — keep paving density constant
   tex.colorSpace = THREE.SRGBColorSpace;
   return tex;
 }
 
-function makeRoadTexture(): THREE.CanvasTexture {
+/** NFS-grade asphalt: layered grain + oil-polished wheel tracks + worn paint.
+ *  Returns albedo + roughness maps; the roughness map is what gives the road
+ *  its wet-look specular sheen down the driving lines. */
+function makeRoadMaps(kind: 'boulevard' | 'highway'): { map: THREE.CanvasTexture; rough: THREE.CanvasTexture } {
+  const W = 512, H = 1024;
   const c = document.createElement('canvas');
-  c.width = 256; c.height = 512;
+  c.width = W; c.height = H;
   const g = c.getContext('2d')!;
-  // driving zone: dark asphalt so the bright markings pop
-  g.fillStyle = '#1e1c24';
-  g.fillRect(0, 0, 256, 512);
-  for (let i = 0; i < 240; i++) {
-    g.fillStyle = `rgba(${24 + Math.random() * 22}, ${23 + Math.random() * 20}, ${29 + Math.random() * 22}, 0.35)`;
-    const s = 6 + Math.random() * 26;
-    g.fillRect(Math.random() * 256, Math.random() * 512, s, s);
+  const rc = document.createElement('canvas');
+  rc.width = W / 2; rc.height = H / 2;
+  const rg = rc.getContext('2d')!;
+
+  // --- base asphalt: Poly Haven photoscan when loaded, procedural fallback.
+  //     Markings/wear composite on top either way. ---
+  if (SURFACE_IMAGES.asphaltDiff) {
+    g.drawImage(SURFACE_IMAGES.asphaltDiff, 0, 0, W, W);
+    g.drawImage(SURFACE_IMAGES.asphaltDiff, 0, W, W, W);
+    // grade the photo down to our moody near-black road tone
+    g.globalCompositeOperation = 'multiply';
+    g.fillStyle = '#55525e';
+    g.fillRect(0, 0, W, H);
+    g.globalCompositeOperation = 'source-over';
+  } else {
+    g.fillStyle = '#232028';
+    g.fillRect(0, 0, W, H);
   }
-  // bright edge lines + dense high-contrast dashes — the speed readout
-  g.fillStyle = 'rgba(235, 230, 214, 0.85)';
-  g.fillRect(10, 0, 6, 512);
-  g.fillRect(240, 0, 6, 512);
-  g.fillStyle = 'rgba(255, 205, 60, 0.9)';
-  for (let y = 6; y < 512; y += 56) {
-    g.fillRect(121, y, 6, 30);
-    g.fillRect(129, y, 6, 30);
+  if (SURFACE_IMAGES.asphaltRough) {
+    rg.drawImage(SURFACE_IMAGES.asphaltRough, 0, 0, rc.width, rc.width);
+    rg.drawImage(SURFACE_IMAGES.asphaltRough, 0, rc.width, rc.width, rc.width);
+  } else {
+    rg.fillStyle = 'rgb(215,215,215)';           // fairly rough by default
+    rg.fillRect(0, 0, rc.width, rc.height);
+  }
+
+  // large-scale tonal drift (sun-bleached vs freshly-sealed bands)
+  for (let i = 0; i < 14; i++) {
+    const y = Math.random() * H, h = 90 + Math.random() * 240;
+    g.fillStyle = `rgba(${30 + Math.random() * 16},${28 + Math.random() * 14},${36 + Math.random() * 16},0.22)`;
+    g.fillRect(0, y, W, h);
+  }
+  // fine aggregate grain
+  for (let i = 0; i < 12000; i++) {
+    const v = 20 + Math.random() * 38;
+    g.fillStyle = `rgba(${v},${v - 1},${v + 6},${0.10 + Math.random() * 0.32})`;
+    const s = 1 + Math.random() * 2.2;
+    g.fillRect(Math.random() * W, Math.random() * H, s, s);
+  }
+  // patched repairs (darker, smoother in the roughness map)
+  for (let i = 0; i < 18; i++) {
+    const x = Math.random() * W, y = Math.random() * H;
+    const w = 50 + Math.random() * 140, h = 40 + Math.random() * 200;
+    g.fillStyle = `rgba(${18 + Math.random() * 12},${17 + Math.random() * 10},${23 + Math.random() * 12},0.55)`;
+    g.fillRect(x, y, w, h);
+    rg.fillStyle = 'rgba(150,150,150,0.6)';
+    rg.fillRect(x / 2, y / 2, w / 2, h / 2);
+  }
+  // tar-sealed cracks (dark gloss lines)
+  for (let i = 0; i < 20; i++) {
+    g.strokeStyle = 'rgba(8,7,11,0.75)';
+    g.lineWidth = 1.4 + Math.random() * 2.2;
+    g.beginPath();
+    let x = Math.random() * W, y = Math.random() * H;
+    g.moveTo(x, y);
+    for (let k = 0; k < 6; k++) { x += (Math.random() - 0.5) * 100; y += Math.random() * 100; g.lineTo(x, y); }
+    g.stroke();
+    rg.strokeStyle = 'rgba(110,110,110,0.7)';
+    rg.lineWidth = 1.4;
+    rg.beginPath(); rg.moveTo(x / 2, y / 2);   // partial trace is fine — just sheen flecks
+    rg.lineTo(x / 2 - 30, y / 2 - 60); rg.stroke();
+  }
+
+  // --- oil-polished wheel tracks: darker albedo + MUCH smoother roughness ---
+  // (this is the NFS look: the driving lines catch the sun/headlights)
+  const laneCenters = kind === 'boulevard' ? [0.155, 0.345, 0.655, 0.845] : [0.17, 0.5, 0.83];
+  for (const lc of laneCenters) {
+    for (const off of [-0.048, 0.048]) {          // two tyre tracks per lane
+      const tx = (lc + off) * W;
+      const grd = g.createLinearGradient(tx - 20, 0, tx + 20, 0);
+      grd.addColorStop(0, 'rgba(6,6,9,0)');
+      grd.addColorStop(0.5, 'rgba(6,6,9,0.55)');
+      grd.addColorStop(1, 'rgba(6,6,9,0)');
+      g.fillStyle = grd; g.fillRect(tx - 20, 0, 40, H);
+      const rgrd = rg.createLinearGradient((tx - 20) / 2, 0, (tx + 20) / 2, 0);
+      rgrd.addColorStop(0, 'rgba(95,95,95,0)');
+      rgrd.addColorStop(0.5, 'rgba(95,95,95,0.85)');
+      rgrd.addColorStop(1, 'rgba(95,95,95,0)');
+      rg.fillStyle = rgrd; rg.fillRect((tx - 20) / 2, 0, 20, rc.height);
+    }
+  }
+
+  // --- lane paint (drawn, then weathered) ---
+  const paint = (x: number, w: number, color: string, dash?: [number, number]) => {
+    g.fillStyle = color;
+    if (!dash) { g.fillRect(x - w / 2, 0, w, H); }
+    else { for (let y = 0; y < H; y += dash[0] + dash[1]) g.fillRect(x - w / 2, y, w, dash[0]); }
+    rg.fillStyle = 'rgba(160,160,160,0.8)';      // paint is smoother than asphalt
+    rg.fillRect((x - w / 2) / 2, 0, w / 2, rc.height);
+  };
+  const white = 'rgba(226,224,214,0.92)', yellow = 'rgba(255,196,40,0.94)';
+  if (kind === 'boulevard') {
+    paint(30, 9, white);                          // solid edges
+    paint(W - 30, 9, white);
+    paint(W / 2 - 7, 7, yellow);                  // double-yellow centreline
+    paint(W / 2 + 7, 7, yellow);
+    paint(W * 0.25, 7, white, [56, 64]);          // dashed lane dividers
+    paint(W * 0.75, 7, white, [56, 64]);
+  } else {
+    paint(26, 9, white);
+    paint(W - 26, 9, white);
+    paint(W / 3, 7, white, [56, 64]);
+    paint((2 * W) / 3, 7, white, [56, 64]);
+  }
+  // weathering: eat random bites out of the paint
+  g.fillStyle = 'rgba(35,32,40,0.75)';
+  for (let i = 0; i < 260; i++) {
+    const s = 2 + Math.random() * 7;
+    g.fillRect(Math.random() * W, Math.random() * H, s, s * (0.5 + Math.random()));
   }
   const tex = new THREE.CanvasTexture(c);
   tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
   tex.colorSpace = THREE.SRGBColorSpace;
-  return tex;
+  const rough = new THREE.CanvasTexture(rc);
+  rough.wrapS = rough.wrapT = THREE.RepeatWrapping;
+  return { map: tex, rough };
+}
+
+/** junction pad: plain asphalt + zebra crosswalks on all four sides + stop lines */
+function makeJunctionMaps(): { map: THREE.CanvasTexture; rough: THREE.CanvasTexture } {
+  const S = 512;
+  const c = document.createElement('canvas'); c.width = c.height = S;
+  const g = c.getContext('2d')!;
+  const rc = document.createElement('canvas'); rc.width = rc.height = S / 2;
+  const rg = rc.getContext('2d')!;
+  g.fillStyle = '#232028'; g.fillRect(0, 0, S, S);
+  rg.fillStyle = 'rgb(210,210,210)'; rg.fillRect(0, 0, S / 2, S / 2);
+  for (let i = 0; i < 5000; i++) {
+    const v = 20 + Math.random() * 36;
+    g.fillStyle = `rgba(${v},${v - 1},${v + 6},${0.12 + Math.random() * 0.3})`;
+    const s = 1 + Math.random() * 2.2;
+    g.fillRect(Math.random() * S, Math.random() * S, s, s);
+  }
+  // polished centre (every car crosses here — worn smooth)
+  const ctr = g.createRadialGradient(S / 2, S / 2, 30, S / 2, S / 2, S / 2);
+  ctr.addColorStop(0, 'rgba(8,8,11,0.4)'); ctr.addColorStop(1, 'rgba(8,8,11,0)');
+  g.fillStyle = ctr; g.fillRect(0, 0, S, S);
+  const rctr = rg.createRadialGradient(S / 4, S / 4, 15, S / 4, S / 4, S / 4);
+  rctr.addColorStop(0, 'rgba(110,110,110,0.8)'); rctr.addColorStop(1, 'rgba(110,110,110,0)');
+  rg.fillStyle = rctr; rg.fillRect(0, 0, S / 2, S / 2);
+  // zebra crosswalks + stop lines on each edge
+  g.fillStyle = 'rgba(222,220,210,0.85)';
+  const stripe = 18, gap = 16, inset = 26, bandW = 56;
+  for (let x = 60; x < S - 60; x += stripe + gap) {
+    g.fillRect(x, inset, stripe, bandW);              // top band
+    g.fillRect(x, S - inset - bandW, stripe, bandW);  // bottom band
+    g.fillRect(inset, x, bandW, stripe);              // left band
+    g.fillRect(S - inset - bandW, x, bandW, stripe);  // right band
+  }
+  g.fillStyle = 'rgba(226,224,214,0.9)';
+  g.fillRect(60, inset + bandW + 12, S - 120, 8);      // stop lines
+  g.fillRect(60, S - inset - bandW - 20, S - 120, 8);
+  g.fillRect(inset + bandW + 12, 60, 8, S - 120);
+  g.fillRect(S - inset - bandW - 20, 60, 8, S - 120);
+  // weathering
+  g.fillStyle = 'rgba(35,32,40,0.7)';
+  for (let i = 0; i < 160; i++) {
+    const s = 2 + Math.random() * 8;
+    g.fillRect(Math.random() * S, Math.random() * S, s, s);
+  }
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return { map: tex, rough: new THREE.CanvasTexture(rc) };
+}
+
+/** arc/annulus strip with RADIAL UVs — v follows the arc so lane markings flow
+ *  around the curve (roundabout, perimeter corners). thetaLen 2π = full ring. */
+function arcRoadGeometry(
+  rMid: number, halfW: number, thetaStart = 0, thetaLen = Math.PI * 2, segs = 0,
+): THREE.BufferGeometry {
+  const geo = new THREE.BufferGeometry();
+  const pos: number[] = [], uv: number[] = [], idx: number[] = [];
+  const arcLen = rMid * thetaLen;
+  const n = segs || Math.max(12, Math.round(arcLen / 1.6));
+  // whole texture repeats along the arc → seamless wrap on full rings
+  const vRepeat = Math.max(1, Math.round(arcLen / 26));
+  for (let i = 0; i <= n; i++) {
+    const t = thetaStart + (i / n) * thetaLen;
+    const cs = Math.cos(t), sn = Math.sin(t);
+    pos.push(cs * (rMid - halfW), 0, sn * (rMid - halfW));
+    pos.push(cs * (rMid + halfW), 0, sn * (rMid + halfW));
+    const v = (i / n) * vRepeat;
+    uv.push(0, v, 1, v);
+    if (i < n) {
+      const a = i * 2;
+      // winding chosen so face normals point +Y (visible from above)
+      idx.push(a, a + 2, a + 1, a + 1, a + 2, a + 3);
+    }
+  }
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  geo.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+  geo.setIndex(idx);
+  geo.computeVertexNormals();
+  return geo;
 }
 
 type BuildingKind = 'glass' | 'concrete' | 'brick';
@@ -274,18 +722,24 @@ function makeSignTexture(lines: string[], bg: string, fg: string): THREE.CanvasT
 
 // ---------------------------------------------------------------- arena
 
-export function buildArena(world: RAPIER.World, scene: THREE.Scene, forcedSkyIdx?: number): ArenaData {
+export function buildArena(world: RAPIER.World, scene: THREE.Scene, forcedSkyIdx?: number, arenaIdx = 0): ArenaData {
   const H = ARENA_HALF;
 
   // --- sky: real gradient dome + sun + stars, three moods rotating per match ---
   // fog is tuned to each preset's HORIZON color so distant buildings melt
   // into the sky instead of silhouetting against it
+  // 'sunbaked' is the signature mood (classic TM small-town sepia haze) and is
+  // weighted to appear most often; day/night keep variety
   const SKY_PRESETS = [
-    { name: 'sunset', top: '#1a0f2e', mid: '#4a2545', hor: '#c96a2e', sunColor: 0xffb070, sunI: 3.4, hemiS: 0xb09adf, hemiG: 0x5a4a58, hemiI: 1.8, fog: 0x84492c, sil: '#2c1830', stars: true, sunPos: [90, 42, 60] as const, sunVis: '#ffcc88' },
+    { name: 'sunbaked', top: '#9a7c55', mid: '#c29d6d', hor: '#e2c493', sunColor: 0xffe0b0, sunI: 3.2, hemiS: 0xe8cfa0, hemiG: 0x7a6a52, hemiI: 2.0, fog: 0xc9a877, sil: '#6b5238', stars: false, sunPos: [95, 55, 35] as const, sunVis: '#fff2cc' },
     { name: 'day', top: '#3a7bd5', mid: '#7db8e8', hor: '#d8e8f0', sunColor: 0xfff4e0, sunI: 3.8, hemiS: 0xcfe8ff, hemiG: 0x8a8578, hemiI: 2.4, fog: 0xc2d8e8, sil: '#8aa4bc', stars: false, sunPos: [70, 120, 40] as const, sunVis: '#ffffff' },
     { name: 'night', top: '#05060f', mid: '#0c1226', hor: '#1c2a4a', sunColor: 0xaac8ff, sunI: 1.2, hemiS: 0x4a5a9c, hemiG: 0x1c1c2a, hemiI: 1.1, fog: 0x141e34, sil: '#080b16', stars: true, sunPos: [60, 90, -80] as const, sunVis: '#e8f0ff' },
+    // index 3: NEON DOCKS signature — violet night, magenta harbor haze
+    { name: 'neonNight', top: '#0a0618', mid: '#16103a', hor: '#3d1a4e', sunColor: 0xb8c8ff, sunI: 1.4, hemiS: 0x5a4ab0, hemiG: 0x1a1428, hemiI: 1.3, fog: 0x1c1234, sil: '#0c0a1c', stars: true, sunPos: [-70, 80, 50] as const, sunVis: '#e8ecff' },
   ];
-  const skyIdx = forcedSkyIdx ?? Math.floor(Math.random() * SKY_PRESETS.length);
+  // weighted pick for the town; the docks always run their neon night
+  const roll = Math.random();
+  const skyIdx = forcedSkyIdx ?? (arenaIdx === 1 ? 3 : roll < 0.5 ? 0 : roll < 0.75 ? 1 : 2);
   const sky = SKY_PRESETS[skyIdx];
 
   // gradient dome
@@ -302,7 +756,7 @@ export function buildArena(world: RAPIER.World, scene: THREE.Scene, forcedSkyIdx
   const domeTex = new THREE.CanvasTexture(domeCanvas);
   domeTex.colorSpace = THREE.SRGBColorSpace;
   const dome = new THREE.Mesh(
-    new THREE.SphereGeometry(520, 24, 16),
+    new THREE.SphereGeometry(700, 24, 16),
     new THREE.MeshBasicMaterial({ map: domeTex, side: THREE.BackSide, fog: false, depthWrite: false }),
   );
   dome.renderOrder = -10;
@@ -314,7 +768,7 @@ export function buildArena(world: RAPIER.World, scene: THREE.Scene, forcedSkyIdx
     new THREE.MeshBasicMaterial({ color: sky.sunVis, fog: false }),
   );
   sunDisc.position.set(sky.sunPos[0], sky.sunPos[1], sky.sunPos[2]).normalize();
-  sunDisc.position.multiplyScalar(490);
+  sunDisc.position.multiplyScalar(650);
   sunDisc.lookAt(0, 0, 0);
   sunDisc.renderOrder = -9;
   scene.add(sunDisc);
@@ -325,7 +779,7 @@ export function buildArena(world: RAPIER.World, scene: THREE.Scene, forcedSkyIdx
     for (let i = 0; i < 500; i++) {
       const a = Math.random() * Math.PI * 2;
       const el = 0.12 + Math.random() * 1.4;
-      const r = 495;
+      const r = 660;
       starPos[i * 3] = Math.cos(a) * Math.cos(el) * r;
       starPos[i * 3 + 1] = Math.sin(el) * r;
       starPos[i * 3 + 2] = Math.sin(a) * Math.cos(el) * r;
@@ -340,42 +794,62 @@ export function buildArena(world: RAPIER.World, scene: THREE.Scene, forcedSkyIdx
     scene.add(stars);
   }
 
-  // distant low-poly skyline ring: sits inside the fog band so it reads as a
-  // hazy far cityscape and hides the arena edge
+  // distant backdrop ring: ROLLING HILLS with a sparse small-town skyline —
+  // sits inside the fog band, hides the arena edge (TM small-town horizon)
   {
     const sc = document.createElement('canvas');
     sc.width = 1024; sc.height = 128;
     const sg = sc.getContext('2d')!;
+    // far hill layer (lighter, hazier)
+    sg.fillStyle = sky.name === 'night' ? '#0b1020' : 'rgba(140,110,78,0.55)';
+    sg.beginPath();
+    sg.moveTo(0, 128);
+    for (let x = 0; x <= 1024; x += 8) {
+      const h = 46 + Math.sin(x * 0.011) * 22 + Math.sin(x * 0.037 + 2) * 9;
+      sg.lineTo(x, 128 - h);
+    }
+    sg.lineTo(1024, 128); sg.closePath(); sg.fill();
+    // near hill layer
     sg.fillStyle = sky.sil;
-    let x = 0;
+    sg.beginPath();
+    sg.moveTo(0, 128);
+    for (let x = 0; x <= 1024; x += 8) {
+      const h = 26 + Math.sin(x * 0.017 + 5) * 14 + Math.sin(x * 0.051) * 6;
+      sg.lineTo(x, 128 - h);
+    }
+    sg.lineTo(1024, 128); sg.closePath(); sg.fill();
+    // sparse low-town silhouettes + water towers along the ridge line
+    let x = 30;
     while (x < 1024) {
-      const w = 22 + Math.random() * 52;
-      const h = 22 + Math.random() * 78;
-      sg.fillRect(x, 128 - h, w, h);
-      // sparse lit windows on the dark presets
-      if (sky.name !== 'day') {
-        sg.fillStyle = 'rgba(255, 214, 140, 0.55)';
-        for (let k = 0; k < w * h * 0.002; k++) {
-          sg.fillRect(x + 3 + Math.random() * (w - 6), 128 - h + 4 + Math.random() * (h - 8), 2, 3);
-        }
+      const w = 14 + Math.random() * 26;
+      const base = 26 + Math.sin(x * 0.017 + 5) * 14;
+      const h = 8 + Math.random() * 16;
+      sg.fillRect(x, 128 - base - h, w, h + 4);
+      if (Math.random() < 0.25) {   // water tower: legs + tank
+        sg.fillRect(x + w + 8, 128 - base - 18, 2, 18);
+        sg.fillRect(x + w + 4, 128 - base - 26, 10, 9);
+      }
+      if (sky.name === 'night') {
+        sg.fillStyle = 'rgba(255, 214, 140, 0.5)';
+        for (let k = 0; k < 3; k++) sg.fillRect(x + 2 + Math.random() * (w - 4), 128 - base - h + 2 + Math.random() * (h - 4), 2, 2);
         sg.fillStyle = sky.sil;
       }
-      x += w + 4 + Math.random() * 18;
+      x += w + 40 + Math.random() * 90;
     }
     const silTex = new THREE.CanvasTexture(sc);
     silTex.wrapS = THREE.RepeatWrapping;
     silTex.repeat.set(3, 1);
     silTex.colorSpace = THREE.SRGBColorSpace;
     const skyline = new THREE.Mesh(
-      new THREE.CylinderGeometry(300, 300, 64, 48, 1, true),
+      new THREE.CylinderGeometry(420, 420, 84, 48, 1, true),
       new THREE.MeshBasicMaterial({ map: silTex, transparent: true, side: THREE.BackSide, fog: true }),
     );
-    skyline.position.y = 30;
+    skyline.position.y = 38;
     scene.add(skyline);
   }
 
   scene.background = new THREE.Color(sky.top);
-  scene.fog = new THREE.Fog(sky.fog, 130, 390);
+  scene.fog = new THREE.Fog(sky.fog, 175, 530);
 
   const hemi = new THREE.HemisphereLight(sky.hemiS, sky.hemiG, sky.hemiI);
   scene.add(hemi);
@@ -403,57 +877,178 @@ export function buildArena(world: RAPIER.World, scene: THREE.Scene, forcedSkyIdx
   floor.receiveShadow = true;
   scene.add(floor);
 
-  // --- roads ---
-  const roadPlane = (cx: number, cz: number, w: number, len: number, rotZ: number, y = 0.03) => {
-    const tex = makeRoadTexture();
-    tex.repeat.set(1, Math.max(1, Math.round(len / 26)));
+  // --- roads: NFS-grade layered asphalt with specular sheen ---
+  const roadMaterial = (kind: 'boulevard' | 'highway', repY: number) => {
+    const maps = makeRoadMaps(kind);
+    maps.map.repeat.set(1, repY);
+    maps.rough.repeat.set(1, repY);
+    return new THREE.MeshStandardMaterial({
+      map: maps.map, roughnessMap: maps.rough, roughness: 1,
+      metalness: 0.06, envMapIntensity: 0.75,
+    });
+  };
+
+  // --- STREET NETWORK: segments at arbitrary angles + arcs + roundabout ---
+  const segRoad = (x0: number, z0: number, x1: number, z1: number, w: number, y: number) => {
+    const len = Math.hypot(x1 - x0, z1 - z0);
     const mesh = new THREE.Mesh(
       new THREE.PlaneGeometry(w, len),
-      new THREE.MeshStandardMaterial({ map: tex, roughness: 0.92 }),
+      roadMaterial(w >= 16 ? 'boulevard' : 'highway', Math.max(1, Math.round(len / 26))),
     );
     mesh.rotation.x = -Math.PI / 2;
-    mesh.rotation.z = rotZ;
-    mesh.position.set(cx, y, cz);
+    // plane length axis is local +Y; rotate it onto the segment direction
+    mesh.rotation.z = Math.atan2(x1 - x0, z1 - z0) + Math.PI;
+    mesh.position.set((x0 + x1) / 2, y, (z0 + z1) / 2);
     mesh.receiveShadow = true;
     scene.add(mesh);
   };
+  const layoutStreets = arenaIdx === 1 ? STREETS_DOCKS : STREETS;
+  layoutStreets.forEach(([x0, z0, x1, z1, w], i) => segRoad(x0, z0, x1, z1, w, 0.03 + (i % 4) * 0.004));
 
-  // boulevards (18 wide = 9× vehicle width), drawn above the ring at crossings
-  roadPlane(0, 0, 18, H * 2, 0, 0.05);
-  roadPlane(0, 0, 18, H * 2, Math.PI / 2, 0.045);
-  // intersection patch
-  const patch = new THREE.Mesh(
-    new THREE.PlaneGeometry(18.2, 18.2),
-    new THREE.MeshStandardMaterial({ color: 0x26242c, roughness: 0.92 }),
-  );
-  patch.rotation.x = -Math.PI / 2;
-  patch.position.set(0, 0.07, 0);
-  patch.receiveShadow = true;
-  scene.add(patch);
+  // perimeter corner arcs (town only — the docks are a hard grid)
+  for (const [cx, cz, r, th0, thLen, w] of (arenaIdx === 1 ? [] : ARCS)) {
+    const arc = new THREE.Mesh(arcRoadGeometry(r, w / 2, th0, thLen), roadMaterial('highway', 1));
+    arc.material.map!.repeat.set(1, 1);
+    arc.material.roughnessMap!.repeat.set(1, 1);
+    arc.position.set(cx, 0.028, cz);
+    arc.receiveShadow = true;
+    scene.add(arc);
+  }
 
-  // ring highway (20 wide = 10× vehicle width) — chamfered octagon, no 90° turns
-  roadPlane(0, -78, 20, 64, Math.PI / 2);
-  roadPlane(0, 78, 20, 64, Math.PI / 2);
-  roadPlane(78, 0, 20, 64, 0);
-  roadPlane(-78, 0, 20, 64, 0);
-  roadPlane(55, -55, 20, 66, Math.PI / 4);
-  roadPlane(-55, 55, 20, 66, Math.PI / 4);
-  roadPlane(55, 55, 20, 66, -Math.PI / 4);
-  roadPlane(-55, -55, 20, 66, -Math.PI / 4);
+  // ROUNDABOUT: ring + drivable pavers island (TM-style — cut across at will)
+  if (arenaIdx === 0) {
+    const ring = new THREE.Mesh(
+      arcRoadGeometry(ROUNDABOUT.r, ROUNDABOUT.w / 2), roadMaterial('highway', 1));
+    ring.material.map!.repeat.set(1, 1);
+    ring.material.roughnessMap!.repeat.set(1, 1);
+    ring.position.y = 0.07;
+    ring.receiveShadow = true;
+    scene.add(ring);
+    const island = new THREE.Mesh(
+      new THREE.CircleGeometry(ROUNDABOUT.islandR, 40),
+      new THREE.MeshStandardMaterial({ map: makeGroundTexture(), roughness: 0.9, color: 0xc9b590 }),
+    );
+    (island.material as THREE.MeshStandardMaterial).map!.repeat.set(2, 2);
+    island.rotation.x = -Math.PI / 2;
+    island.position.y = 0.075;
+    island.receiveShadow = true;
+    scene.add(island);
+  }
 
-  // sidewalks flanking the boulevards
-  const walkMat = new THREE.MeshStandardMaterial({ color: 0x5c5662, roughness: 0.9 });
-  for (const off of [-11.2, 11.2]) {
-    const wNS = new THREE.Mesh(new THREE.PlaneGeometry(4.5, H * 2), walkMat);
-    wNS.rotation.x = -Math.PI / 2;
-    wNS.position.set(off, 0.015, 0);
-    wNS.receiveShadow = true;
-    scene.add(wNS);
-    const wEW = new THREE.Mesh(new THREE.PlaneGeometry(H * 2, 4.5), walkMat);
-    wEW.rotation.x = -Math.PI / 2;
-    wEW.position.set(0, 0.012, off);
-    wEW.receiveShadow = true;
-    scene.add(wEW);
+  // junction pads with crosswalks + stop lines at every street crossing
+  const junctionMaps = makeJunctionMaps();
+  const junction = (x: number, z: number, size: number, yaw = 0, y = 0.08) => {
+    const mesh = new THREE.Mesh(
+      new THREE.PlaneGeometry(size, size),
+      new THREE.MeshStandardMaterial({
+        map: junctionMaps.map, roughnessMap: junctionMaps.rough, roughness: 1,
+        metalness: 0.06, envMapIntensity: 0.75,
+      }),
+    );
+    mesh.rotation.x = -Math.PI / 2;
+    mesh.rotation.z = yaw;
+    mesh.position.set(x, y, z);
+    mesh.receiveShadow = true;
+    scene.add(mesh);
+  };
+  if (arenaIdx === 1) {
+    for (const [jx, jz, size] of JUNCTIONS_DOCKS) junction(jx, jz, size);
+  } else {
+    // diagonal avenues × connectors — all four crossings coincide at (±88,±88)
+    junction(88, -88, 26, Math.PI / 4); junction(-88, 88, 26, Math.PI / 4);
+    junction(88, 88, 26, Math.PI / 4); junction(-88, -88, 26, Math.PI / 4);
+    // connectors × perimeter (T-junctions)
+    for (const s of [1, -1]) {
+      junction(s * 88, -138, 18); junction(s * 88, 138, 18);
+      junction(138, s * 88, 18); junction(-138, s * 88, 18);
+    }
+  }
+
+  // curbs: showcase streets only (diagonals near the roundabout + island edge)
+  const curbMat = new THREE.MeshStandardMaterial({ color: 0x9a8d7a, roughness: 0.82 });
+  // lip stays below the bloom threshold — a brighter one blows out into blobs
+  const curbLipMat = new THREE.MeshStandardMaterial({ color: 0xaa9d88, roughness: 0.85 });
+  const curbRun = (cx: number, cz: number, hx: number, hz: number, yaw = 0) => {
+    addDecoBox(scene, curbMat, cx, 0.11, cz, hx, 0.11, hz, yaw);
+    addDecoBox(scene, curbLipMat, cx, 0.225, cz, hx * 0.96, 0.02, hz * 0.96, yaw);
+  };
+  if (arenaIdx === 0) {
+    // island ring curb (40 short segments around the roundabout island)
+    for (let i = 0; i < 40; i++) {
+      const t = (i / 40) * Math.PI * 2;
+      const r = ROUNDABOUT.islandR + 0.3;
+      curbRun(Math.cos(t) * r, Math.sin(t) * r, 1.3, 0.3, -t);
+    }
+    // avenue curbs from the roundabout out to the tunnel portals (both diagonals),
+    // set just off the 18m avenue edges; d = distance along the diagonal
+    for (const s of [1, -1]) {
+      for (const side of [1, -1]) {
+        // main avenue (1,-1): runs from d=24 to d=38 (portal at ~39.6)
+        const d0 = 24, d1 = 38, dm = (d0 + d1) / 2, hl = (d1 - d0) / 2;
+        const off = (18 / 2 + 0.4) * side;
+        // unit along = (0.707, -0.707); unit perp = (0.707, 0.707)
+        curbRun(s * dm * 0.707 + off * 0.707, -s * dm * 0.707 + off * 0.707, hl, 0.3, Math.PI / 4);
+        // cross avenue (1,1)
+        const off2 = (14 / 2 + 0.4) * side;
+        curbRun(s * dm * 0.707 + off2 * 0.707, s * dm * 0.707 - off2 * 0.707, hl, 0.3, -Math.PI / 4);
+      }
+    }
+  } else {
+    // NEON DOCKS: black harbor water beyond the east wall, catching the sky
+    const water = new THREE.Mesh(
+      new THREE.PlaneGeometry(360, 700),
+      new THREE.MeshStandardMaterial({
+        color: 0x06121e, roughness: 0.15, metalness: 0.85,
+        envMapIntensity: 1.2,
+      }),
+    );
+    water.rotation.x = -Math.PI / 2;
+    water.position.set(H + 180, -0.4, 0);
+    scene.add(water);
+  }
+
+  // boost pad chevron visual (shared by both arena paths)
+  const chevronTex = (() => {
+    const c = document.createElement('canvas');
+    c.width = 128; c.height = 64;
+    const g = c.getContext('2d')!;
+    g.fillStyle = 'rgba(255, 150, 20, 0.95)';
+    for (const off of [0, 44, 88]) {
+      g.beginPath();
+      g.moveTo(off, 8); g.lineTo(off + 30, 32); g.lineTo(off, 56);
+      g.lineTo(off + 14, 56); g.lineTo(off + 44, 32); g.lineTo(off + 14, 8);
+      g.closePath();
+      g.fill();
+    }
+    const t = new THREE.CanvasTexture(c);
+    t.colorSpace = THREE.SRGBColorSpace;
+    return t;
+  })();
+  const padVisual = (x: number, y: number, z: number, alongX: boolean) => {
+    const mesh = new THREE.Mesh(
+      new THREE.PlaneGeometry(7, 3.6),
+      new THREE.MeshStandardMaterial({
+        map: chevronTex, transparent: true,
+        emissive: 0xffffff, emissiveMap: chevronTex, emissiveIntensity: 1.1,
+        roughness: 0.6,
+      }),
+    );
+    mesh.rotation.x = -Math.PI / 2;
+    if (!alongX) mesh.rotation.z = Math.PI / 2;
+    mesh.position.set(x, y + 0.09, z);
+    scene.add(mesh);
+  };
+
+  // ============== BLENDER-AUTHORED ARENA (arena.glb) ==============
+  // All structures, colliders and gameplay markers come from the GLB;
+  // everything above (sky, ground, roads, curbs) plus the return below is
+  // the only code-side contribution. Falls through to the procedural city
+  // if the GLB failed to load.
+  const glb = getArenaScene(arenaIdx);
+  if (glb) {
+    const data = consumeArenaGLB(world, scene, glb);
+    for (const pad of data.boostPads) padVisual(pad.x, pad.y, pad.z, pad.hx >= pad.hz);
+    return { ...data, skyIdx, envColors: { top: sky.top, hor: sky.hor } };
   }
 
   // --- materials ---
@@ -546,6 +1141,14 @@ export function buildArena(world: RAPIER.World, scene: THREE.Scene, forcedSkyIdx
   for (const [sx, sz] of [[1, 1], [-1, 1], [1, -1], [-1, -1]] as const) {
     blocks.forEach(([bx, bz, hx, hy, hz], i) => {
       const hVar = hy + ((sx * 3 + sz * 5 + i) % 3) * 0.8;
+      // STAGE 1: the NE-quadrant corner block is authored in Blender (recessed
+      // windows, roof assets, COL_ proxy). Rest still procedural for now.
+      const blenderSrc = getArenaBuilding();
+      if (blenderSrc && i === 0 && sx === 1 && sz === 1) {
+        placeBlenderAsset(world, scene, blenderSrc, bx * sx, bz * sz, 0.06);
+        ti++;
+        return;
+      }
       building(bx * sx, bz * sz, hx, hVar, hz, tints[ti % tints.length], (sx * sz * (i + 1)) * 0.06, ti++);
     });
   }
@@ -688,35 +1291,8 @@ export function buildArena(world: RAPIER.World, scene: THREE.Scene, forcedSkyIdx
   skySeg(48, 68, 6.5, 0.1);      // east descent
 
   const boostPads: ArenaData['boostPads'] = [];
-  const chevronTex = (() => {
-    const c = document.createElement('canvas');
-    c.width = 128; c.height = 64;
-    const g = c.getContext('2d')!;
-    g.fillStyle = 'rgba(255, 150, 20, 0.95)';
-    for (const off of [0, 44, 88]) {
-      g.beginPath();
-      g.moveTo(off, 8); g.lineTo(off + 30, 32); g.lineTo(off, 56);
-      g.lineTo(off + 14, 56); g.lineTo(off + 44, 32); g.lineTo(off + 14, 8);
-      g.closePath();
-      g.fill();
-    }
-    const t = new THREE.CanvasTexture(c);
-    t.colorSpace = THREE.SRGBColorSpace;
-    return t;
-  })();
   const buildPad = (x: number, z: number, alongX: boolean, y = 0) => {
-    const mesh = new THREE.Mesh(
-      new THREE.PlaneGeometry(7, 3.6),
-      new THREE.MeshStandardMaterial({
-        map: chevronTex, transparent: true,
-        emissive: 0xffffff, emissiveMap: chevronTex, emissiveIntensity: 1.1,
-        roughness: 0.6,
-      }),
-    );
-    mesh.rotation.x = -Math.PI / 2;
-    if (!alongX) mesh.rotation.z = Math.PI / 2;
-    mesh.position.set(x, y + 0.09, z);
-    scene.add(mesh);
+    padVisual(x, y, z, alongX);
     boostPads.push(alongX ? { x, y, z, hx: 3.5, hz: 1.8 } : { x, y, z, hx: 1.8, hz: 3.5 });
   };
   buildPad(-58, -78, true);   // skyway west approach (under the on-ramp start)
@@ -789,5 +1365,5 @@ export function buildArena(world: RAPIER.World, scene: THREE.Scene, forcedSkyIdx
     { x: -41, z: 41, hx: 4, hz: 4 },
   ];
 
-  return { spawnPoints, pickupPoints, barrelPoints, pedZones, boostPads, skyIdx };
+  return { spawnPoints, pickupPoints, barrelPoints, pedZones, boostPads, pumpPoints: [], skyIdx, envColors: { top: sky.top, hor: sky.hor } };
 }

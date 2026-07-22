@@ -1,6 +1,7 @@
 import type { Vehicle } from '../game/vehicle';
 import type { Game } from '../game/game';
 import { MODES } from '../game/game';
+import { STREETS, ARCS, ROUNDABOUT, STREETS_DOCKS } from '../game/arena';
 
 const $ = (id: string) => document.getElementById(id)!;
 const THREE_clamp = (v: number, a: number, b: number) => Math.max(a, Math.min(b, v));
@@ -30,6 +31,7 @@ export class Hud {
   private lastMissiles = -1;
   private lastMines = -1;
   private radarMap: HTMLCanvasElement | null = null;
+  private radarArenaIdx = -1;
   private shieldRow = $('shield-row');
   private panic = $('panic');
   private popups = $('dmg-popups');
@@ -139,7 +141,9 @@ export class Hud {
       const right = game.mode === 'survival'
         ? `${v.score}&nbsp;&nbsp;${v.eliminated ? '☠' : '♥'.repeat(Math.max(0, v.lives))}`
         : `${v.score}`;
-      return `<div class="${cls}"><span>${v.name}</span><span class="k">${right}</span></div>`;
+      // streak flame at 3+, gold bounty ring on the marked leader
+      const tags = `${v.killStreak >= 3 ? ' 🔥' : ''}${v === (game as any).bountyTarget ? ' <span style="color:#ffd24a">◎</span>' : ''}`;
+      return `<div class="${cls}"><span>${v.name}${tags}</span><span class="k">${right}</span></div>`;
     }).join('');
 
     // lock-on reticle: hidden → LOCKING (progress ring) → LOCKED (pulsing)
@@ -175,40 +179,66 @@ export class Hud {
   }
 
   /** static street-layout underlay, drawn once (mirrors arena.ts geometry) */
-  private buildRadarMap(): HTMLCanvasElement {
+  private buildRadarMap(arenaIdx = 0): HTMLCanvasElement {
+    // drawn from the arena's own street data so the radar can never drift
     const S = this.radar.width;
-    const s = (S / 2) / 120;                 // world meters → map px
+    const s = (S / 2) / 160;                 // world meters → map px
     const c = document.createElement('canvas');
     c.width = c.height = S;
     const g = c.getContext('2d')!;
     const px = (w: number) => w * s + S / 2;
-    // perimeter
-    g.strokeStyle = 'rgba(255,255,255,0.14)';
-    g.lineWidth = 2;
-    g.strokeRect(px(-120), px(-120), 240 * s, 240 * s);
-    // boulevards
-    g.fillStyle = 'rgba(255,255,255,0.13)';
-    g.fillRect(px(-9), px(-120), 18 * s, 240 * s);
-    g.fillRect(px(-120), px(-9), 240 * s, 18 * s);
-    // octagonal ring highway
-    const oct: [number, number][] = [[-32, -78], [32, -78], [78, -32], [78, 32], [32, 78], [-32, 78], [-78, 32], [-78, -32]];
     g.strokeStyle = 'rgba(255,255,255,0.15)';
-    g.lineWidth = 20 * s;
-    g.lineJoin = 'round';
+    g.lineCap = 'round';
+    // streets
+    for (const [x0, z0, x1, z1, w] of (arenaIdx === 1 ? STREETS_DOCKS : STREETS)) {
+      g.lineWidth = w * s;
+      g.beginPath();
+      g.moveTo(px(x0), px(z0));
+      g.lineTo(px(x1), px(z1));
+      g.stroke();
+    }
+    if (arenaIdx === 1) {
+      // docks: water band east + the two drive-through warehouses in cyan
+      g.fillStyle = 'rgba(40,90,160,0.35)';
+      g.fillRect(px(140), px(-160), 20 * s, 320 * s);
+      g.strokeStyle = 'rgba(80,200,255,0.45)';
+      g.lineWidth = 3;
+      g.strokeRect(px(32), px(-75), 24 * s, 60 * s);
+      g.strokeRect(px(32), px(15), 24 * s, 60 * s);
+      return c;
+    }
+    // perimeter corner arcs
+    for (const [cx, cz, r, th0, thLen, w] of ARCS) {
+      g.lineWidth = w * s;
+      g.beginPath();
+      g.arc(px(cx), px(cz), r * s, th0, th0 + thLen);
+      g.stroke();
+    }
+    // roundabout + island
+    g.lineWidth = ROUNDABOUT.w * s;
     g.beginPath();
-    oct.forEach(([x, z], i) => (i === 0 ? g.moveTo(px(x), px(z)) : g.lineTo(px(x), px(z))));
-    g.closePath();
+    g.arc(px(0), px(0), ROUNDABOUT.r * s, 0, Math.PI * 2);
     g.stroke();
-    // skyway (elevated track) — its theme orange
+    g.fillStyle = 'rgba(220,190,130,0.35)';
+    g.beginPath();
+    g.arc(px(0), px(0), ROUNDABOUT.islandR * s, 0, Math.PI * 2);
+    g.fill();
+    // diagonal tunnels — cyan like their neon
+    g.strokeStyle = 'rgba(80,200,255,0.45)';
+    g.lineWidth = 14 * s;
+    for (const d of [1, -1]) {
+      g.beginPath();
+      g.moveTo(px(d * 28), px(-d * 28));
+      g.lineTo(px(d * 63), px(-d * 63));
+      g.stroke();
+    }
+    // skyway (elevated track) — theme orange
     g.strokeStyle = 'rgba(255,130,40,0.5)';
     g.lineWidth = 10 * s;
     g.beginPath();
-    g.moveTo(px(-68), px(-78));
-    g.lineTo(px(68), px(-78));
+    g.moveTo(px(-90), px(120));
+    g.lineTo(px(90), px(120));
     g.stroke();
-    // central bridge
-    g.fillStyle = 'rgba(120,200,255,0.3)';
-    g.fillRect(px(-10), px(-9.4), 20 * s, 18.8 * s);
     return c;
   }
 
@@ -216,7 +246,7 @@ export class Hud {
     const ctx = this.radarCtx;
     const S = this.radar.width;
     const C = S / 2;
-    const RANGE = 120;
+    const RANGE = 160;   // MUST match buildRadarMap's scale or the underlay drifts
     ctx.clearRect(0, 0, S, S);
 
     const pPos = player.position;
@@ -224,8 +254,12 @@ export class Hud {
     const heading = Math.atan2(-fwd.x, -fwd.z);
     const cos = Math.cos(-heading), sin = Math.sin(-heading);
 
-    // street-layout underlay, rotated into the player's frame
-    if (!this.radarMap) this.radarMap = this.buildRadarMap();
+    // street-layout underlay, rotated into the player's frame (per-arena cache)
+    const arenaIdx = (game as any).arenaIdx ?? 0;
+    if (!this.radarMap || this.radarArenaIdx !== arenaIdx) {
+      this.radarMap = this.buildRadarMap(arenaIdx);
+      this.radarArenaIdx = arenaIdx;
+    }
     const s = C / RANGE;
     ctx.save();
     ctx.beginPath();
@@ -268,6 +302,27 @@ export class Hud {
       ctx.beginPath();
       ctx.arc(px, py, 4, 0, Math.PI * 2);
       ctx.fill();
+      // gold bounty ring — the marked leader is visible map-wide
+      if (v === (game as any).bountyTarget) {
+        ctx.strokeStyle = '#ffd24a';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(px, py, 7, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+    }
+
+    // sudden-death ring: red circle centred on the town square (world origin)
+    const sdR = (game as any).suddenDeathR;
+    if (sdR !== Infinity && sdR !== undefined) {
+      const s2 = C / RANGE;
+      const rx = (0 - pPos.x) * cos - (0 - pPos.z) * sin;
+      const rz = (0 - pPos.x) * sin + (0 - pPos.z) * cos;
+      ctx.strokeStyle = 'rgba(255,60,40,0.8)';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(C + rx * s2, C + rz * s2, sdR * s2, 0, Math.PI * 2);
+      ctx.stroke();
     }
 
     ctx.fillStyle = '#7dffb0';

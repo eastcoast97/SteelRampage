@@ -12,7 +12,7 @@ export interface CarModel {
 
 const BODY_FILES: Record<CarSpec['build'], string> = {
   speed: 'race',
-  muscle: 'sedan-sports',
+  muscle: 'hero-body',   // custom Blender-built body (see docs/BLENDER.md)
   sports: 'race-future',
   suv: 'police',
   tank: 'truck',
@@ -23,7 +23,7 @@ const BODY_FILES: Record<CarSpec['build'], string> = {
 
 const WHEEL_FILES: Record<CarSpec['build'], string> = {
   speed: 'wheel-racing',
-  muscle: 'wheel-default',
+  muscle: 'hero-wheel',
   sports: 'wheel-racing',
   suv: 'wheel-default',
   tank: 'wheel-truck',
@@ -39,6 +39,60 @@ let originalTexture: THREE.Texture | null = null;
 
 export function getCarModel(build: CarSpec['build']): CarModel | null {
   return library?.get(build) ?? null;
+}
+
+/** Blender-authored arena assets. Objects named `COL_*` are collision proxies
+ *  (see docs/BLENDER.md) — arena.ts turns them into Rapier colliders. */
+let arenaBuilding: THREE.Group | null = null;
+export function getArenaBuilding(): THREE.Group | null { return arenaBuilding; }
+
+/** The COMPLETE Blender-authored arenas (structures + COL_/SPAWN_/PICKUP_/
+ *  BOOST_/PED_/BARREL_/PUMP_ markers). Index matches ARENAS in arena.ts. */
+const arenaScenes: (THREE.Group | null)[] = [null, null];
+export function getArenaScene(idx = 0): THREE.Group | null { return arenaScenes[idx] ?? null; }
+
+/** Battle-wear pass over a palette canvas: grime mottling, rust speckle and
+ *  paint chips. The palette is a UV atlas, so even noise reads as even wear
+ *  across the whole body — exactly the sun-beaten TM look. */
+function weatherCanvas(g: CanvasRenderingContext2D, w: number, h: number): void {
+  // dust/grime mottling
+  for (let i = 0; i < 260; i++) {
+    g.fillStyle = `rgba(${40 + Math.random() * 30},${34 + Math.random() * 24},${24 + Math.random() * 18},${0.05 + Math.random() * 0.1})`;
+    const s = 3 + Math.random() * 10;
+    g.fillRect(Math.random() * w, Math.random() * h, s, s);
+  }
+  // rust speckle
+  for (let i = 0; i < 420; i++) {
+    g.fillStyle = `rgba(${95 + Math.random() * 50},${45 + Math.random() * 25},${18 + Math.random() * 14},${0.25 + Math.random() * 0.35})`;
+    const s = 0.6 + Math.random() * 1.8;
+    g.fillRect(Math.random() * w, Math.random() * h, s, s);
+  }
+  // paint chips (bright bare-metal nicks)
+  for (let i = 0; i < 140; i++) {
+    g.fillStyle = `rgba(${150 + Math.random() * 60},${150 + Math.random() * 55},${145 + Math.random() * 50},${0.3 + Math.random() * 0.3})`;
+    g.fillRect(Math.random() * w, Math.random() * h, 1 + Math.random() * 1.6, 1 + Math.random() * 1.2);
+  }
+}
+
+/** weathered copy of the stock palette — for the keep-stock-livery builds */
+let weatheredStock: THREE.CanvasTexture | null = null;
+export function getWeatheredStockTexture(): THREE.Texture | null {
+  if (weatheredStock) return weatheredStock;
+  if (!paletteImage || !originalTexture) return originalTexture;
+  const c = document.createElement('canvas');
+  c.width = paletteImage.width;
+  c.height = paletteImage.height;
+  const g = c.getContext('2d')!;
+  g.drawImage(paletteImage, 0, 0);
+  weatherCanvas(g, c.width, c.height);
+  weatheredStock = new THREE.CanvasTexture(c);
+  weatheredStock.flipY = originalTexture.flipY;
+  weatheredStock.wrapS = originalTexture.wrapS;
+  weatheredStock.wrapT = originalTexture.wrapT;
+  weatheredStock.offset.copy(originalTexture.offset);
+  weatheredStock.repeat.copy(originalTexture.repeat);
+  weatheredStock.colorSpace = THREE.SRGBColorSpace;
+  return weatheredStock;
 }
 
 /** Recolor the shared Kenney palette: saturated pixels (paint) take the target
@@ -70,6 +124,7 @@ export function getTintedTexture(colorHex: number): THREE.Texture | null {
     }
   }
   g.putImageData(img, 0, 0);
+  weatherCanvas(g, c.width, c.height);
   const tex = new THREE.CanvasTexture(c);
   tex.flipY = originalTexture.flipY;
   tex.wrapS = originalTexture.wrapS;
@@ -91,10 +146,17 @@ export async function loadCarModels(): Promise<void> {
   try {
     const builds = Object.keys(BODY_FILES) as CarSpec['build'][];
     const wheelNames = [...new Set(Object.values(WHEEL_FILES))];
-    const [bodies, wheels] = await Promise.all([
+    const [bodies, wheels, bldg, arena, docks] = await Promise.all([
       Promise.all(builds.map((b) => load(BODY_FILES[b]))),
       Promise.all(wheelNames.map((w) => load(w))),
+      // arena assets authored in Blender — failure here must not block cars
+      load('arena-building').catch(() => null),
+      load('arena').catch(() => null),
+      load('arena-docks').catch(() => null),
     ]);
+    arenaBuilding = bldg;
+    arenaScenes[0] = arena;
+    arenaScenes[1] = docks;
     const wheelByName = new Map(wheelNames.map((n, i) => [n, wheels[i]]));
     library = new Map();
     builds.forEach((b, i) => {

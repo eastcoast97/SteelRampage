@@ -62,7 +62,10 @@ export class Vehicle {
   shieldFlash = 0;
 
   // per-vehicle special weapon (starts charged)
-  specialEnergy = 1;
+  /** EARNED resource: starts empty; +25% per kill or special pickup, 3-kill
+   *  streak fills it instantly. No passive regen. */
+  specialEnergy = 0;
+  killStreak = 0;
   specialActiveTime = 0;
   turretTimer = 0;
   /** raw special damage dealt per victim this activation — enforces the
@@ -365,9 +368,7 @@ export class Vehicle {
     this.shieldFlash = Math.max(0, this.shieldFlash - dt);
     this.overdriveTime = Math.max(0, this.overdriveTime - dt);
     this.specialActiveTime = Math.max(0, this.specialActiveTime - dt);
-    if (!this.bombOut && this.specialActiveTime <= 0) {
-      this.specialEnergy = Math.min(1, this.specialEnergy + dt / this.spec.specialRecharge);
-    }
+    // NOTE: no passive special recharge — energy comes from kills and pickups only
   }
 
   private applyImpulseAt(dir: THREE.Vector3, magnitude: number, point: THREE.Vector3) {
@@ -414,7 +415,8 @@ export class Vehicle {
     this.health = this.spec.maxHealth;
     this.missiles = 0;
     this.turboMeter = this.spec.turboMax;
-    this.specialEnergy = 0.5;
+    // specialEnergy carries across death (it's earned) — but the streak breaks
+    this.killStreak = 0;
     this.specialActiveTime = 0;
     this.bombOut = false;
     this.alive = true;

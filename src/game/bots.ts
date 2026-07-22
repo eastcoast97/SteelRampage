@@ -12,17 +12,28 @@ export class BotController {
   private retargetTimer = 0;
   private stuckTimer = 0;
   private reverseTimer = 0;
+  private reverseSteer = 1;
   private burstTimer = 0;
   private burstOn = false;
   private aggression: number;
   private goalPickup: THREE.Vector3 | null = null;
+  /** persistent avoidance: keeps the steer-away decision stable for a beat so
+   *  long walls (Arena 3.0 tunnels) don't cause steer-flip oscillation */
+  private avoidBias = 0;
+  private avoidT = 0;
+  private goalStuckT = 0;
+  private pickupBanT = 0;
+  /** repeated unstuck triggers → the goal is behind a wall; wander sideways */
+  private frustration = 0;
+  private detour: THREE.Vector3 | null = null;
+  private detourT = 0;
 
   constructor(vehicle: Vehicle) {
     this.vehicle = vehicle;
     this.aggression = 0.65 + Math.random() * 0.35;
   }
 
-  update(dt: number, vehicles: Vehicle[], player: Vehicle, pickups: PickupManager, world: RAPIER.World) {
+  update(dt: number, vehicles: Vehicle[], player: Vehicle, pickups: PickupManager, world: RAPIER.World, suddenDeathR = Infinity) {
     const v = this.vehicle;
     if (!v.alive) return;
 
@@ -39,9 +50,16 @@ export class BotController {
     fwd.normalize();
 
     // decide where to drive
-    let goal: THREE.Vector3 | null = this.goalPickup;
+    this.detourT -= dt;
+    let goal: THREE.Vector3 | null = this.detourT > 0 ? this.detour : null;
+    if (!goal) goal = this.goalPickup;
     if (!goal && this.target?.alive) goal = this.target.position;
     if (!goal) goal = new THREE.Vector3(0, 0, 0);
+    // SUDDEN DEATH overrides everything: get inside the ring or burn
+    if (suddenDeathR !== Infinity) {
+      const r = Math.hypot(v.position.x, v.position.z);
+      if (r > suddenDeathR - 12) goal = new THREE.Vector3(0, 0, 0);
+    }
 
     _toTarget.copy(goal).sub(pos);
     _toTarget.y = 0;
@@ -53,36 +71,79 @@ export class BotController {
     const dot = THREE.MathUtils.clamp(fwd.dot(_toTarget), -1, 1);
     let angle = Math.atan2(-cross, dot); // positive = goal is to the left
 
-    // obstacle avoidance: short ray ahead
-    const rayOrigin = { x: pos.x + fwd.x * 2.5, y: pos.y + 0.4, z: pos.z + fwd.z * 2.5 };
-    const ray = new RAPIER.Ray(rayOrigin, { x: fwd.x, y: 0, z: fwd.z });
-    const hit = world.castRay(ray, 9, true, undefined, undefined, undefined, v.body);
-    if (hit && v.speed > 4) {
-      angle += angle >= 0 ? 0.9 : -0.9;
+    // obstacle avoidance: three whiskers (centre + ±29°), ALWAYS active —
+    // the old single speed-gated ray oscillated against long oblique walls
+    const whisker = (dx: number, dz: number, range: number): number => {
+      const o = { x: pos.x + dx * 2.3, y: pos.y + 0.4, z: pos.z + dz * 2.3 };
+      const hit = world.castRay(new RAPIER.Ray(o, { x: dx, y: 0, z: dz }), range, true,
+        undefined, undefined, undefined, v.body);
+      return hit ? ((hit as any).timeOfImpact ?? (hit as any).toi) : Infinity;
+    };
+    const A = 0.5, cA = Math.cos(A), sA = Math.sin(A);
+    const dC = whisker(fwd.x, fwd.z, 13);
+    const dL = whisker(fwd.x * cA + fwd.z * sA, -fwd.x * sA + fwd.z * cA, 9);
+    const dR = whisker(fwd.x * cA - fwd.z * sA, fwd.x * sA + fwd.z * cA, 9);
+    const dMin = Math.min(dC, dL, dR);
+    if (dMin < 12) {
+      // obstacle on the left → steer right (negative); commit for a beat
+      const push = dL <= dR ? -1 : 1;
+      const urgency = THREE.MathUtils.clamp((12 - dMin) / 12, 0, 1);
+      this.avoidBias = push * (0.7 + 1.4 * urgency);
+      this.avoidT = 0.55;
+    }
+    if (this.avoidT > 0) {
+      this.avoidT -= dt;
+      angle += this.avoidBias;
     }
 
     // steering + throttle
     let steer = THREE.MathUtils.clamp(angle * 2.2, -1, 1);
     let throttle = 1;
     if (Math.abs(angle) > 1.9 && v.speed > 10) throttle = 0.25; // ease off in hard turns
+    if (dC < 6 && v.speed > 14) throttle = 0.35;                // brake for walls
     if (this.target?.alive && !this.goalPickup && dist < 14 && Math.abs(angle) < 0.5) {
       throttle = v.speed > 12 ? 0.3 : 0.7; // don't overshoot targets at close range
     }
 
-    // unstuck logic
+    // unstuck logic — back out TOWARD the open side, then let the whiskers
+    // re-decide (the old blind `-steer` drove straight back into the wall)
     if (v.speed < 1.2 && throttle > 0.5) {
       this.stuckTimer += dt;
-      if (this.stuckTimer > 1.4) {
-        this.reverseTimer = 1.1;
+      if (this.stuckTimer > 1.2) {
+        this.reverseTimer = 1.5;
+        this.reverseSteer = dL <= dR ? 1 : -1;   // nose swings away from the blocked side
         this.stuckTimer = 0;
+        // second unstuck in a short window → the goal is walled off; drive
+        // 45m sideways for a few seconds to find a way around
+        this.frustration += 1;
+        if (this.frustration >= 2) {
+          this.frustration = 0;
+          const side = Math.random() < 0.5 ? 1 : -1;
+          this.detour = new THREE.Vector3(pos.x - fwd.z * side * 45, 0, pos.z + fwd.x * side * 45);
+          this.detourT = 3.5;
+        }
       }
     } else {
       this.stuckTimer = Math.max(0, this.stuckTimer - dt);
+      this.frustration = Math.max(0, this.frustration - dt * 0.25);  // forgive after clean driving
     }
     if (this.reverseTimer > 0) {
       this.reverseTimer -= dt;
       throttle = -1;
-      steer = -steer;
+      steer = this.reverseSteer;
+    }
+
+    // pickup goal unreachable (wall between us) → give up and fight instead
+    this.pickupBanT = Math.max(0, this.pickupBanT - dt);
+    if (this.goalPickup) {
+      this.goalStuckT = v.speed < 2.5 ? this.goalStuckT + dt : Math.max(0, this.goalStuckT - dt * 2);
+      if (this.goalStuckT > 4) {
+        this.goalPickup = null;
+        this.pickupBanT = 7;
+        this.goalStuckT = 0;
+      }
+    } else {
+      this.goalStuckT = 0;
     }
 
     v.input.throttle = throttle;
@@ -174,13 +235,19 @@ export class BotController {
   private pickGoalPickup(pickups: PickupManager) {
     const v = this.vehicle;
     this.goalPickup = null;
+    if (this.pickupBanT > 0) return;   // recently failed to reach one — fight instead
     if (v.health < v.spec.maxHealth * 0.4) {
       const p = pickups.nearestActive('health', v.position);
       if (p && p.distanceTo(v.position) < 90) { this.goalPickup = p; return; }
     }
     if (v.missiles === 0 && Math.random() < 0.7) {
       const p = pickups.nearestActive('missiles', v.position);
-      if (p && p.distanceTo(v.position) < 60) this.goalPickup = p;
+      if (p && p.distanceTo(v.position) < 60) { this.goalPickup = p; return; }
+    }
+    // specials are earned now — bots detour for energy cells when running dry
+    if (v.specialEnergy < 0.75 && Math.random() < 0.4) {
+      const p = pickups.nearestActive('special', v.position);
+      if (p && p.distanceTo(v.position) < 55) this.goalPickup = p;
     }
   }
 }

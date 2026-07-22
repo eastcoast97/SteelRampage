@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import type { Vehicle } from './vehicle';
 
-export type PickupType = 'health' | 'missiles' | 'turbo' | 'shield' | 'overdrive' | 'mines';
+export type PickupType = 'health' | 'missiles' | 'turbo' | 'shield' | 'overdrive' | 'mines' | 'special';
 
 const RESPAWN_TIME: Record<PickupType, number> = {
   health: 11,
@@ -10,7 +10,25 @@ const RESPAWN_TIME: Record<PickupType, number> = {
   shield: 18,
   overdrive: 22,
   mines: 14,
+  special: 16,
 };
+
+/** canonical order — index is what goes over the wire for guest sync */
+export const PICKUP_TYPE_ORDER: PickupType[] = ['health', 'missiles', 'turbo', 'shield', 'overdrive', 'mines', 'special'];
+
+/** respawn shuffle pool: sockets cycle types so locations can't be farmed by
+ *  memory. Weighted — offense stays most common; overdrive never shuffles in
+ *  (it keeps its dedicated roaming socket). */
+const SHUFFLE_POOL: [PickupType, number][] = [
+  ['missiles', 28], ['health', 22], ['turbo', 16], ['mines', 14], ['special', 12], ['shield', 8],
+];
+function rollShuffleType(): PickupType {
+  let total = 0;
+  for (const [, w] of SHUFFLE_POOL) total += w;
+  let r = Math.random() * total;
+  for (const [t, w] of SHUFFLE_POOL) { r -= w; if (r <= 0) return t; }
+  return 'missiles';
+}
 
 interface Pickup {
   type: PickupType;
@@ -39,6 +57,7 @@ export const PICKUP_COLORS: Record<PickupType, number> = {
   shield: 0x5c7cff,    // Aegis Indigo
   overdrive: 0xff44dd, // reserved magenta
   mines: 0x9a9aa6,     // Graphite trim (body is dark, red dot is the signal)
+  special: 0xc94dff,   // Special violet — matches the special-meter bar
 };
 const COLORS = PICKUP_COLORS;
 
@@ -126,6 +145,16 @@ function buildPickupMesh(type: PickupType): THREE.Group {
     inv.position.y = -0.55;
     core.add(inv);
     core.position.y = 0.28;
+  } else if (type === 'special') {
+    // special energy cell: violet octahedron in a spinning halo — matches the
+    // special-meter magenta so the association is instant
+    core = new THREE.Mesh(new THREE.OctahedronGeometry(0.42, 0), mat);
+    const halo = new THREE.Mesh(
+      new THREE.TorusGeometry(0.62, 0.05, 8, 24),
+      new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.75, blending: THREE.AdditiveBlending, depthWrite: false }),
+    );
+    halo.rotation.x = Math.PI / 2.6;
+    core.add(halo);
   } else {
     // mines: same look as a deployed mine — graphite disc, red dot signal
     core = new THREE.Mesh(
@@ -146,8 +175,10 @@ function buildPickupMesh(type: PickupType): THREE.Group {
 export class PickupManager {
   private pickups: Pickup[] = [];
   private time = 0;
+  private scene: THREE.Scene;
 
   constructor(scene: THREE.Scene, points: { pos: THREE.Vector3; type: PickupType; alts?: THREE.Vector3[] }[]) {
+    this.scene = scene;
     for (const p of points) {
       const mesh = buildPickupMesh(p.type);
       mesh.position.copy(p.pos);
@@ -199,6 +230,10 @@ export class PickupManager {
             p.mesh.position.copy(next);
             p.ring.position.set(next.x, next.y - 0.75, next.z);
           }
+          // TYPE SHUFFLE: sockets cycle through the weighted pool on respawn
+          // so weapon locations can't be farmed by memory (overdrive keeps
+          // its dedicated roaming socket)
+          if (p.type !== 'overdrive') this.applyType(p, rollShuffleType());
           p.active = true;
           p.mesh.visible = true;
           p.popT = 0.15;
@@ -222,6 +257,7 @@ export class PickupManager {
           if (p.type === 'missiles' && v.missiles >= 3) continue;
           if (p.type === 'turbo' && v.turboMeter >= v.spec.turboMax - 0.1) continue;
           if (p.type === 'mines' && v.minesAmmo >= 6) continue;
+          if (p.type === 'special' && v.specialEnergy >= 1) continue;
           p.active = false;
           // ±30% jitter so respawn timers can't be memorized and camped
           p.timer = RESPAWN_TIME[p.type] * (0.7 + Math.random() * 0.6);
@@ -231,6 +267,26 @@ export class PickupManager {
         }
       }
     }
+  }
+
+  /** swap a socket's type: rebuild the icon mesh + retint the socket ring */
+  private applyType(p: Pickup, type: PickupType): void {
+    if (p.type === type) return;
+    const wasVisible = p.mesh.visible;
+    this.scene.remove(p.mesh);
+    p.type = type;
+    p.mesh = buildPickupMesh(type);
+    p.mesh.position.copy(p.pos);
+    p.mesh.visible = wasVisible;
+    this.scene.add(p.mesh);
+    p.ringMat.color.setHex(PICKUP_COLORS[type]);
+  }
+
+  /** guest sync: host streams each socket's current type index */
+  setTypeByIndex(i: number, typeIdx: number): void {
+    const p = this.pickups[i];
+    const t = PICKUP_TYPE_ORDER[typeIdx];
+    if (p && t) this.applyType(p, t);
   }
 
   nearestActive(type: PickupType, from: THREE.Vector3): THREE.Vector3 | null {
