@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import type { CarSpec } from '../game/specs';
+import { assetUrl } from '../assets';
 
 /** Kenney Car Kit (CC0) — real car bodies; wheels come as separate models
  *  so our suspension/steering wheel rig keeps working. */
@@ -140,7 +141,7 @@ export async function loadCarModels(): Promise<void> {
   const loader = new GLTFLoader();
   const load = (name: string) =>
     new Promise<THREE.Group>((resolve, reject) => {
-      loader.load(`/models/${name}.glb`, (gltf) => resolve(gltf.scene), undefined, reject);
+      loader.load(assetUrl(`models/${name}.glb`), (gltf) => resolve(gltf.scene), undefined, reject);
     });
 
   try {

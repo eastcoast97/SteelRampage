@@ -1,4 +1,5 @@
 /** Tiny procedural WebAudio SFX — no asset files needed. */
+import { assetUrl } from '../assets';
 
 export type EngineKind = 'sports' | 'v8' | 'rally';
 
@@ -114,7 +115,7 @@ class Sfx {
   private async loadEngineSamples() {
     if (!this.ctx) return;
     try {
-      const data = await fetch('/audio/engine-short.mp3').then((r) => r.arrayBuffer());
+      const data = await fetch(assetUrl('audio/engine-short.mp3')).then((r) => r.arrayBuffer());
       const buf = await this.ctx.decodeAudioData(data);
       this.engineBuf = buf;
       this.revBuf = buf;

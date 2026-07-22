@@ -7,6 +7,7 @@ import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
 import { Game, FIXED_DT, MODES, type GameMode, type RosterEntry } from './game/game';
 import { CAR_SPECS, BOT_NAMES, type CarSpec } from './game/specs';
 import { ARENAS, loadSurfaceTextures } from './game/arena';
+import { assetUrl } from './assets';
 import { RGBELoader } from 'three/examples/jsm/loaders/RGBELoader.js';
 import { Input } from './core/input';
 import { loadCarModels } from './render/carModels';
@@ -80,7 +81,7 @@ async function boot() {
   // Poly Haven HDRI reflection environments (CC0): town sunset + docks night.
   // Loaded lazily, PMREM'd once, cached; gradient env is the fallback.
   const hdriEnvs: (THREE.Texture | null | 'loading')[] = [null, null];
-  const HDRI_FILES = ['/textures/town_env_1k.hdr', '/textures/docks_env_1k.hdr'];
+  const HDRI_FILES = [assetUrl('textures/town_env_1k.hdr'), assetUrl('textures/docks_env_1k.hdr')];
   const applyEnv = (g: Game) => {
     const idx = g.arenaIdx ?? 0;
     const cached = hdriEnvs[idx];

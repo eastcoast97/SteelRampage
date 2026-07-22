@@ -3,6 +3,7 @@ import * as THREE from 'three';
 import type { PickupType } from './pickups';
 import type { PedZone } from './peds';
 import { getArenaBuilding, getArenaScene } from '../render/carModels';
+import { assetUrl } from '../assets';
 
 /** Arena 4.0 "Sunbaked Junction" — 320×320 organic town, modelled on classic
  *  Twisted Metal small-town maps: central ROUNDABOUT with a clock tower,
@@ -29,9 +30,9 @@ export async function loadSurfaceTextures(): Promise<void> {
     img.src = src;
   });
   const [ad, ar, cd] = await Promise.all([
-    load('/textures/asphalt_01_diff_1k.jpg'),
-    load('/textures/asphalt_01_rough_1k.jpg'),
-    load('/textures/concrete_floor_diff_1k.jpg'),
+    load(assetUrl('textures/asphalt_01_diff_1k.jpg')),
+    load(assetUrl('textures/asphalt_01_rough_1k.jpg')),
+    load(assetUrl('textures/concrete_floor_diff_1k.jpg')),
   ]);
   SURFACE_IMAGES.asphaltDiff = ad;
   SURFACE_IMAGES.asphaltRough = ar;
