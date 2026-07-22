@@ -25,6 +25,10 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run build
+        env:
+          # online multiplayer relay (Render free service) — the Pages build
+          # connects HOST/JOIN rooms through this WebSocket endpoint
+          VITE_RELAY_URL: wss://steel-rampage.onrender.com
       - uses: actions/upload-pages-artifact@v3
         with:
           path: dist
