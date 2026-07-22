@@ -85,13 +85,20 @@ export class Hud {
     }
     this.turboBar.style.width = `${(player.turboMeter / player.spec.turboMax) * 100}%`;
 
-    // special weapon bar
+    // special weapon bar — three states:
+    //   windowed (E pressed): 45s countdown drains, special freely usable
+    //   charged: full bar, READY
+    //   charging: energy fraction
+    const windowed = player.specialWindow > 0;
     const active = player.specialActiveTime > 0;
-    const ready = player.specialEnergy >= 1 && !active;
-    this.specialBar.style.width = `${(active ? 1 : player.specialEnergy) * 100}%`;
-    this.specialBar.classList.toggle('active', active);
+    const ready = player.specialEnergy >= 1 && !windowed;
+    this.specialBar.style.width = `${(windowed ? player.specialWindow / 45 : player.specialEnergy) * 100}%`;
+    this.specialBar.classList.toggle('active', windowed || active);
     if (player.spec.specialId === 'bomb' && player.bombOut) {
       this.specialLabel.textContent = `${player.spec.specialName} — PRESS AGAIN TO DETONATE`;
+      this.specialLabel.className = 'bar-label special ready';
+    } else if (windowed) {
+      this.specialLabel.textContent = `${player.spec.specialName} — ${Math.ceil(player.specialWindow)}s`;
       this.specialLabel.className = 'bar-label special ready';
     } else {
       this.specialLabel.textContent = player.spec.specialName + (ready ? ' — READY' : '');

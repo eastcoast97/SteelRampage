@@ -191,7 +191,10 @@ export class BotController {
       }
 
       // special weapon usage — per-archetype heuristics
-      if (v.specialEnergy >= 1 && v.specialActiveTime <= 0 && !v.bombOut) {
+      const canSpecial = v.specialWindow > 0
+        ? v.specialCooldown <= 0            // window open — burst off cooldown
+        : v.specialEnergy >= 1;             // otherwise needs a full bar
+      if (canSpecial && v.specialActiveTime <= 0 && !v.bombOut) {
         const id = v.spec.specialId;
         if (
           (id === 'dash' && facing > 0.9 && tDist > 10 && tDist < 40) ||

@@ -77,7 +77,7 @@ export function serializeSnapshot(g: Game): any {
       Math.round(v.specialEnergy * 100), r1(v.shieldTime), Math.round(v.lockProgress * 100),
       v.lockTarget ? g.vehicles.indexOf(v.lockTarget) : -1,
       v.missiles, v.minesAmmo, r1(v.turboMeter), v.lives,
-      r1(v.specialActiveTime), v.killStreak,
+      r1(v.specialActiveTime), v.killStreak, r1(v.specialWindow),
     ];
   });
   const mis = g.missiles.filter((m) => !m.dead).map((m) => [r1(m.pos.x), r1(m.pos.y), r1(m.pos.z), r1(m.vel.x), r1(m.vel.y), r1(m.vel.z)]);
@@ -286,6 +286,7 @@ export class GuestSync {
       v.lives = a[20];
       v.specialActiveTime = a[21];
       v.killStreak = a[22] ?? 0;
+      v.specialWindow = a[23] ?? 0;
       v.eliminated = !!(flags & 16);
       v.overdriveTime = flags & 32 ? 1 : 0;
       v.drifting = !!(flags & 64);

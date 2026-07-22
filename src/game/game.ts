@@ -46,6 +46,11 @@ const MINE_RADIUS = 5.5;
 const BARREL_DAMAGE = 24;
 const BARREL_RADIUS = 6.5;
 const SPECIAL_CAP = 29;          // 0.85 × locked missile — specials can never exceed it
+/** seconds between bursts while a 45s special window is open */
+const SPECIAL_RETRIGGER: Record<string, number> = {
+  dash: 3, minigun: 5, flame: 3.5, turret: 6, slam: 4,
+  bomb: 1, repair: 7, minetrail: 3,
+};
 const RAM_CAP = 18;
 const SLAM_DAMAGE = 22;
 const FLAME_DPS = 20;
@@ -856,12 +861,24 @@ export class Game {
   private handleSpecial(v: Vehicle, dt: number) {
     const id = v.spec.specialId;
 
-    // activation
+    // activation — a full bar opens a 45s WINDOW during which the special is
+    // freely re-usable (short per-special cooldown between bursts). The HUD
+    // shows the countdown next to the special bar.
     if (v.input.special) {
       if (id === 'bomb' && v.bombOut) {
-        // second press = detonate
+        // second press = detonate (always allowed, no cooldown)
         const bomb = this.bombs.find((b) => b.owner === v && !b.dead);
         if (bomb) this.detonateBomb(bomb);
+      } else if (v.specialWindow > 0) {
+        // inside the window: re-trigger freely
+        if (v.specialCooldown <= 0 && v.specialActiveTime <= 0) {
+          if (id === 'repair' && v.health >= v.spec.maxHealth) {
+            if (v === this.player) this.hud.toast('ARMOR ALREADY FULL', '#8a7f96');
+          } else {
+            this.activateSpecial(v);
+            v.specialCooldown = SPECIAL_RETRIGGER[id] ?? 3;
+          }
+        }
       } else if (v.specialEnergy >= 1 && v.specialActiveTime <= 0) {
         if (id === 'repair' && v.health >= v.spec.maxHealth) {
           // don't burn the charge on a full tank
@@ -869,8 +886,10 @@ export class Game {
         } else {
           v.specialEnergy = 0;
           v.spawnProtection = 0;
+          v.specialWindow = 45;
           this.activateSpecial(v);
-          if (v === this.player) this.hud.toast(v.spec.specialName + '!', '#ff9ef2');
+          v.specialCooldown = SPECIAL_RETRIGGER[id] ?? 3;
+          if (v === this.player) this.hud.toast(`${v.spec.specialName} ONLINE — 45s`, '#ff9ef2');
         }
       } else if (v === this.player && v.specialActiveTime <= 0) {
         // never fail silently — tell the player why nothing happened

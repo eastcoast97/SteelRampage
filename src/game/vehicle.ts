@@ -66,6 +66,10 @@ export class Vehicle {
    *  streak fills it instantly. No passive regen. */
   specialEnergy = 0;
   killStreak = 0;
+  /** pressing E with a full bar opens a 45s window — the special is freely
+   *  re-usable (gated by specialCooldown) until it runs out */
+  specialWindow = 0;
+  specialCooldown = 0;
   specialActiveTime = 0;
   turretTimer = 0;
   /** raw special damage dealt per victim this activation — enforces the
@@ -368,6 +372,8 @@ export class Vehicle {
     this.shieldFlash = Math.max(0, this.shieldFlash - dt);
     this.overdriveTime = Math.max(0, this.overdriveTime - dt);
     this.specialActiveTime = Math.max(0, this.specialActiveTime - dt);
+    this.specialWindow = Math.max(0, this.specialWindow - dt);
+    this.specialCooldown = Math.max(0, this.specialCooldown - dt);
     // NOTE: no passive special recharge — energy comes from kills and pickups only
   }
 
@@ -416,7 +422,10 @@ export class Vehicle {
     this.missiles = 0;
     this.turboMeter = this.spec.turboMax;
     // specialEnergy carries across death (it's earned) — but the streak breaks
+    // and any open special window is lost with the wreck
     this.killStreak = 0;
+    this.specialWindow = 0;
+    this.specialCooldown = 0;
     this.specialActiveTime = 0;
     this.bombOut = false;
     this.alive = true;
