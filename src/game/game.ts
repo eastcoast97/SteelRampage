@@ -1491,6 +1491,45 @@ export class Game {
     }
   }
 
+  /**
+   * GUEST ONLY — switch every body the guest does NOT control to kinematic.
+   * Snapshots teleport those bodies each frame; leaving them dynamic would make
+   * the solver fight the teleports (and let them fall between snapshots) once
+   * the guest starts stepping the world for local prediction. Kinematic bodies
+   * still collide with (and shove) the predicted player car.
+   */
+  enableGuestPrediction() {
+    const me = this.player;
+    for (const v of this.vehicles) {
+      if (v === me) continue;
+      v.body.setBodyType(RAPIER.RigidBodyType.KinematicPositionBased, true);
+    }
+    for (const b of this.barrels) {
+      b.body.setBodyType(RAPIER.RigidBodyType.KinematicPositionBased, true);
+    }
+  }
+
+  /**
+   * GUEST ONLY — simulate the player's OWN car locally so steering/throttle
+   * respond on the very next frame instead of after a full network round trip
+   * (input → host → sim → snapshot → interpolation buffer ≈ 300ms+).
+   * Everything else — weapons, damage, pickups, scoring — stays host-authoritative;
+   * GuestSync reconciles this prediction against each incoming snapshot.
+   */
+  predictLocal(dt: number, input: Input) {
+    const me = this.player;
+    this.time += dt;
+    if (!me.alive || this.state !== 'playing' || this.paused) return;
+    // movement only — weapons are the host's call, and consuming edge-triggered
+    // inputs here would steal them from the message we send upstream
+    me.input.throttle = input.throttle;
+    me.input.steer = input.steer;
+    me.input.handbrake = input.handbrake;
+    me.input.turbo = input.turbo;
+    me.update(dt, this.world);
+    this.world.step();
+  }
+
   /** online host: a guest disconnected — their car keeps fighting as a bot */
   adoptBot(idx: number) {
     const v = this.vehicles[idx];

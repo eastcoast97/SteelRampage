@@ -49,6 +49,29 @@
     </div>
   </div>
 
+  <!-- LOADING / MATCH INTRO — covers asset loading and the online handshake -->
+  <div id="loading">
+    <h1 class="title">STEEL<span> RAMPAGE</span></h1>
+    <div id="loading-status">LOADING ASSETS</div>
+    <div id="loading-track"><div id="loading-fill"></div></div>
+    <div class="load-controls">
+      <div class="lc-head">CONTROLS</div>
+      <div class="lc-grid">
+        <div class="lc-row"><span class="keys"><kbd>W</kbd><kbd>S</kbd></span><span>drive / reverse</span></div>
+        <div class="lc-row"><span class="keys"><kbd>A</kbd><kbd>D</kbd></span><span>steer</span></div>
+        <div class="lc-row"><span class="keys"><kbd>SHIFT</kbd></span><span>turbo boost</span></div>
+        <div class="lc-row"><span class="keys"><kbd>SPACE</kbd></span><span>handbrake / drift</span></div>
+        <div class="lc-row"><span class="keys"><kbd>CLICK</kbd><kbd>F</kbd></span><span>machine gun</span></div>
+        <div class="lc-row"><span class="keys"><kbd>RCLICK</kbd><kbd>E</kbd></span><span>special weapon</span></div>
+        <div class="lc-row"><span class="keys"><kbd>G</kbd></span><span>homing missile</span></div>
+        <div class="lc-row"><span class="keys"><kbd>Q</kbd></span><span>drop mine</span></div>
+        <div class="lc-row"><span class="keys"><kbd>R</kbd></span><span>flip car upright</span></div>
+        <div class="lc-row"><span class="keys"><kbd>ESC</kbd><kbd>M</kbd></span><span>pause / mute</span></div>
+      </div>
+    </div>
+    <div id="loading-tip"></div>
+  </div>
+
   <!-- MAIN MENU -->
   <div id="menu">
     <h1 class="title">STEEL<span> RAMPAGE</span></h1>
@@ -91,7 +114,10 @@
     <h1 id="gameover-title">VICTORY</h1>
     <div id="gameover-subtitle"></div>
     <div id="final-board"></div>
-    <button id="restart-btn">PLAY AGAIN</button>
+    <div class="over-actions">
+      <button id="restart-btn">PLAY AGAIN</button>
+      <button id="menu-btn" class="secondary">MAIN MENU</button>
+    </div>
   </div>
 
   <script type="module" src="/src/main.ts"></script>

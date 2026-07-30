@@ -70,6 +70,9 @@ export class Vehicle {
    *  re-usable (gated by specialCooldown) until it runs out */
   specialWindow = 0;
   specialCooldown = 0;
+  /** ONLINE: client clock stamp of the newest input the host applied to this
+   *  vehicle. Echoed back in snapshots so a guest can measure its own RTT. */
+  lastInputTs = 0;
   specialActiveTime = 0;
   turretTimer = 0;
   /** raw special damage dealt per victim this activation — enforces the

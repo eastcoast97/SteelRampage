@@ -298,6 +298,56 @@ html, body {
 
 #gameover-subtitle { color: #9b97ac; font-size: 15px; margin: -12px 0 24px; letter-spacing: 1px; font-family: Arial, sans-serif; }
 
+/* ---------- LOADING / MATCH INTRO ---------- */
+#loading {
+  position: fixed; inset: 0; z-index: 20;
+  display: flex; flex-direction: column; align-items: center; justify-content: safe center;
+  gap: 10px; overflow-y: auto; padding: 16px 0;
+  background: radial-gradient(ellipse at 50% 35%, #2a1c34 0%, #08070d 72%);
+  color: #fff;
+}
+#loading.hidden { display: none; }
+#loading .title { font-size: clamp(32px, 6vw, 60px); }
+#loading-status {
+  letter-spacing: 5px; font-size: 13px; color: var(--accent2);
+  animation: pulse 1.4s ease-in-out infinite;
+}
+@keyframes pulse { 0%,100% { opacity: .45 } 50% { opacity: 1 } }
+#loading-track {
+  width: min(420px, 72vw); height: 6px; background: rgba(255,255,255,0.1);
+  transform: skewX(-16deg); overflow: hidden;
+}
+#loading-fill {
+  height: 100%; width: 0%;
+  background: linear-gradient(90deg, var(--accent), var(--accent2));
+  transition: width .25s ease;
+}
+.load-controls {
+  margin-top: 12px; padding: 16px 22px;
+  border: 1px solid rgba(255,255,255,0.12);
+  background: rgba(255,255,255,0.03);
+  max-width: min(620px, 92vw);
+}
+.lc-head { letter-spacing: 4px; font-size: 12px; color: #9b97ac; margin-bottom: 12px; text-align: center; }
+.lc-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 26px; }
+.lc-row { display: flex; align-items: center; gap: 9px; font-size: 12px; color: #c9c6d4; font-family: Arial, sans-serif; }
+.lc-row .keys { display: flex; gap: 4px; flex: 0 0 auto; }
+.lc-row kbd {
+  font-family: inherit; font-size: 10px; letter-spacing: 1px;
+  background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2);
+  border-bottom-width: 2px; padding: 3px 7px; color: #fff;
+}
+#loading-tip {
+  margin-top: 10px; font-size: 12px; color: #8d8a9e;
+  font-family: Arial, sans-serif; font-style: italic;
+  max-width: min(560px, 88vw); text-align: center; min-height: 32px;
+}
+@media (max-height: 780px) {
+  .load-controls { padding: 10px 16px; margin-top: 6px; }
+  .lc-grid { gap: 5px 22px; }
+  #loading .title { font-size: 34px; }
+}
+
 /* ---------- MENU ---------- */
 #menu, #gameover {
   position: fixed; inset: 0; z-index: 10;
@@ -411,6 +461,20 @@ html, body {
 }
 #start-btn:hover, #restart-btn:hover { transform: skewX(-8deg) translateY(-2px); }
 #start-btn:active, #restart-btn:active { transform: skewX(-8deg) translateY(3px); box-shadow: 0 2px 0 #6b1c00; }
+
+/* post-match actions sit side by side; MAIN MENU is the quieter option */
+.over-actions { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; justify-content: center; }
+#menu-btn {
+  font-family: inherit;
+  font-size: 16px; letter-spacing: 2px;
+  color: #fff; background: rgba(255,255,255,0.1);
+  border: 2px solid rgba(255,255,255,0.22);
+  padding: 14px 32px;
+  transform: skewX(-8deg);
+  cursor: pointer;
+  transition: background .12s, transform .1s;
+}
+#menu-btn:hover { background: rgba(255,255,255,0.18); transform: skewX(-8deg) translateY(-2px); }
 
 .controls-help {
   margin-top: 30px; display: flex; gap: 18px; flex-wrap: wrap; justify-content: center;

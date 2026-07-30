@@ -78,6 +78,7 @@ export function serializeSnapshot(g: Game): any {
       v.lockTarget ? g.vehicles.indexOf(v.lockTarget) : -1,
       v.missiles, v.minesAmmo, r1(v.turboMeter), v.lives,
       r1(v.specialActiveTime), v.killStreak, r1(v.specialWindow),
+      v.lastInputTs,   // echo: lets that guest measure its own round-trip time
     ];
   });
   const mis = g.missiles.filter((m) => !m.dead).map((m) => [r1(m.pos.x), r1(m.pos.y), r1(m.pos.z), r1(m.vel.x), r1(m.vel.y), r1(m.vel.z)]);
@@ -193,6 +194,14 @@ export class GuestSync {
   private minePool: ProxyPool;
   private bombPool: ProxyPool;
   gameOver: { order: number[]; scores: number[]; sub: string } | null = null;
+  /** smoothed round-trip time (ms), measured from the host's input echo */
+  rtt = 120;
+  /** residual position error being bled off gradually (anti rubber-band) */
+  private correction = new THREE.Vector3();
+  private authQuat = new THREE.Quaternion();
+  private hasAuthQuat = false;
+  /** true once the first snapshot lands — the match is really running */
+  ready = false;
 
   constructor(private game: Game, private myIdx: number) {
     this.missilePool = new ProxyPool(game.scene, buildProxyMissile, 14);
@@ -203,8 +212,77 @@ export class GuestSync {
   onSnapshot(s: any) {
     this.buf.push({ rt: performance.now(), s });
     if (this.buf.length > 10) this.buf.shift();
+    this.ready = true;
+    this.reconcileSelf(s);
     this.applyEvents(s.ev ?? []);
     this.applyDiscrete(s);
+  }
+
+  /**
+   * Compare the locally-predicted car against the host's authoritative state.
+   * The snapshot describes the world as it was ~half a round trip ago, so the
+   * authoritative state is first extrapolated forward by that much before
+   * measuring error — otherwise every correction would drag the car backwards
+   * at speed. Small errors bleed off smoothly; big ones (respawn, teleport,
+   * a collision we mispredicted) snap.
+   */
+  private reconcileSelf(s: any) {
+    const me = this.game.vehicles[this.myIdx];
+    const a = s.veh?.[this.myIdx];
+    if (!me || !a) return;
+
+    const echo = a[24];
+    if (echo) {
+      const sample = Math.min(600, Math.max(0, performance.now() - echo));
+      this.rtt = this.rtt * 0.8 + sample * 0.2;   // smooth out jitter
+    }
+
+    const authVel = new THREE.Vector3(a[7], a[8], a[9]);
+    const lead = Math.min(0.3, this.rtt / 2000);  // seconds of travel to re-add
+    const target = new THREE.Vector3(a[0], a[1], a[2]).addScaledVector(authVel, lead);
+
+    this.authQuat.set(a[3], a[4], a[5], a[6]);
+    this.hasAuthQuat = true;
+
+    const t = me.body.translation();
+    const err = target.clone().sub(new THREE.Vector3(t.x, t.y, t.z));
+    const dist = err.length();
+
+    if (!me.alive || dist > 8) {
+      // hard resync: respawn, wreck, or a divergence we can't smooth away
+      me.body.setTranslation({ x: a[0], y: a[1], z: a[2] }, true);
+      me.body.setRotation({ x: a[3], y: a[4], z: a[5], w: a[6] }, true);
+      me.body.setLinvel({ x: authVel.x, y: authVel.y, z: authVel.z }, true);
+      me.body.setAngvel({ x: 0, y: 0, z: 0 }, true);
+      this.correction.set(0, 0, 0);
+    } else {
+      this.correction.copy(err);
+    }
+  }
+
+  /**
+   * Bleed the pending correction into the predicted body a little each frame,
+   * and ease rotation toward the host's. Called from the guest's frame loop
+   * right after the local physics step.
+   */
+  applyCorrection(dt: number) {
+    const me = this.game.vehicles[this.myIdx];
+    if (!me?.alive) return;
+    if (this.correction.lengthSq() > 1e-6) {
+      const k = Math.min(1, dt * 6);            // ~85% closed after 0.3s
+      const t = me.body.translation();
+      me.body.setTranslation(
+        { x: t.x + this.correction.x * k, y: t.y + this.correction.y * k, z: t.z + this.correction.z * k },
+        true,
+      );
+      this.correction.multiplyScalar(1 - k);
+    }
+    if (this.hasAuthQuat) {
+      const r = me.body.rotation();
+      _q1.set(r.x, r.y, r.z, r.w);
+      _q1.slerp(this.authQuat, Math.min(1, dt * 2.5));
+      me.body.setRotation({ x: _q1.x, y: _q1.y, z: _q1.z, w: _q1.w }, true);
+    }
   }
 
   /** events fire once, on arrival */
@@ -359,17 +437,24 @@ export class GuestSync {
     const span = Math.max(1, b.rt - a.rt);
     const alpha = Math.max(0, Math.min(1, (target - a.rt) / span));
     g.vehicles.forEach((v, i) => {
+      // the guest's OWN car is simulated locally (prediction) and reconciled in
+      // reconcileSelf/applyCorrection — interpolating it here would drag it
+      // back into the past and undo the whole point
+      if (i === this.myIdx) return;
       const va = a.s.veh[i], vb = b.s.veh[i];
       if (!va || !vb || !v.alive) return;
       const x = va[0] + (vb[0] - va[0]) * alpha;
       const y = va[1] + (vb[1] - va[1]) * alpha;
       const z = va[2] + (vb[2] - va[2]) * alpha;
+      // remote cars are kinematic on guests: setNextKinematicTranslation lets
+      // the solver resolve contacts against them instead of teleporting through
+      v.body.setNextKinematicTranslation({ x, y, z });
       v.body.setTranslation({ x, y, z }, false);
       _q1.set(va[3], va[4], va[5], va[6]);
       _q2.set(vb[3], vb[4], vb[5], vb[6]);
       _qo.slerpQuaternions(_q1, _q2, alpha);
+      v.body.setNextKinematicRotation({ x: _qo.x, y: _qo.y, z: _qo.z, w: _qo.w });
       v.body.setRotation({ x: _qo.x, y: _qo.y, z: _qo.z, w: _qo.w }, false);
-      v.body.setLinvel({ x: vb[7], y: vb[8], z: vb[9] }, false);
       // spin wheels from actual speed; fake rear contacts for drift smoke
       const spd = Math.hypot(vb[7], vb[8], vb[9]);
       v.wheelSpin += (spd / 0.26) * (1 / 60);

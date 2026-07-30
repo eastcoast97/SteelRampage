@@ -25,8 +25,58 @@ const ENGINE_KIND: Record<CarSpec['build'], EngineKind> = {
 
 const $ = (id: string) => document.getElementById(id)!;
 
+/** Loading / match-intro overlay: covers asset loading and the online
+ *  handshake, and doubles as the controls reference. Always dwells long
+ *  enough to actually be readable. */
+const TIPS = [
+  'Specials are EARNED — kills and energy cells fill the bar. A 3-kill streak fills it instantly.',
+  'Press E with a full bar to open a 45-second window: your special re-fires free until it expires.',
+  'Pickup sockets reroll what they hold — that missile spot might be a shield next time.',
+  'Shoot the clock tower enough and it comes down. Whoever lands the last hit chooses which way it falls.',
+  'Gas pumps go up like bombs. Lead a chasing enemy past the station.',
+  'Missiles need a 0.9s lock — break line of sight through a tunnel and the lock dies.',
+  'Boost pads chain into the skyway. Hit one at speed for serious airtime.',
+  'Land flat after a jump for a perfect-landing boost.',
+  'Take the lead by two kills and you get a BOUNTY — everyone can see you, and your killer gets a full special.',
+  'When SUDDEN DEATH hits, the ring closes on the town square. Outside it, you burn.',
+];
+const loading = {
+  el: () => $('loading'),
+  tipTimer: 0 as any,
+  minUntil: 0,
+  show(status: string, pct = 0) {
+    this.el().classList.remove('hidden');
+    $('loading-status').textContent = status;
+    $('loading-fill').style.width = `${pct}%`;
+    this.minUntil = performance.now() + 1600;   // readable dwell
+    const roll = () => { $('loading-tip').textContent = TIPS[Math.floor(Math.random() * TIPS.length)]; };
+    roll();
+    clearInterval(this.tipTimer);
+    this.tipTimer = setInterval(roll, 3600);
+  },
+  progress(pct: number, status?: string) {
+    $('loading-fill').style.width = `${pct}%`;
+    if (status) $('loading-status').textContent = status;
+  },
+  /** resolves once the bar is full AND the minimum dwell has elapsed */
+  async done(status = 'READY') {
+    this.progress(100, status);
+    const wait = Math.max(0, this.minUntil - performance.now());
+    await new Promise((r) => setTimeout(r, wait));
+    clearInterval(this.tipTimer);
+    this.el().classList.add('hidden');
+  },
+};
+
 async function boot() {
-  await Promise.all([RAPIER.init(), loadCarModels(), loadSurfaceTextures()]);
+  loading.show('LOADING ASSETS', 8);
+  const tracked = <T,>(p: Promise<T>, pct: number, label: string): Promise<T> =>
+    p.then((v) => { loading.progress(pct, label); return v; });
+  await Promise.all([
+    tracked(RAPIER.init(), 35, 'PHYSICS ONLINE'),
+    tracked(loadCarModels(), 70, 'VEHICLES LOADED'),
+    tracked(loadSurfaceTextures(), 90, 'ARENA SURFACES LOADED'),
+  ]);
 
   const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
   renderer.setSize(window.innerWidth, window.innerHeight);
@@ -323,8 +373,9 @@ async function boot() {
     hud.show();
   }
 
-  function startMatch() {
+  async function startMatch() {
     sfx.init();
+    loading.show(netRole === 'host' ? 'STARTING MATCH' : 'ENTERING THE ARENA', 30);
     if (game) game.dispose(renderer);
     guestOverShown = false;
 
@@ -355,21 +406,32 @@ async function boot() {
     (window as any).__game = game;
     (window as any).__input = input;
     enterMatchUI();
+    await loading.done('GO');
   }
 
-  function startGuestMatch(m: any) {
+  async function startGuestMatch(m: any) {
     sfx.init();
+    loading.show('CONNECTING TO HOST', 40);
     if (game) game.dispose(renderer);
     guestOverShown = false;
     game = new Game(CAR_SPECS[0], hud, window.innerWidth / window.innerHeight, m.mode,
       { role: 'guest', roster: m.roster, playerIdx: m.myIdx, skyIdx: m.skyIdx }, m.arena ?? 0);
     guestSync = new GuestSync(game, m.myIdx);
+    game.enableGuestPrediction();
     applyEnv(game);
     sfx.setEngineProfile(ENGINE_KIND[game.player.spec.build]);
     (window as any).__guestSync = guestSync;
     (window as any).__game = game;
     (window as any).__input = input;
     enterMatchUI();
+    // hold the overlay until the host's first snapshot actually lands, so the
+    // player never stares at a frozen arena during the handshake
+    loading.progress(75, 'SYNCING WITH HOST');
+    const started = performance.now();
+    while (!guestSync?.ready && performance.now() - started < 15000) {
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    await loading.done(guestSync?.ready ? 'GO' : 'HOST NOT RESPONDING');
   }
 
   function quitToMenu() {
@@ -431,6 +493,12 @@ async function boot() {
     if (netRole) leaveLobby();
     quitToMenu();
   });
+  // post-match: back to the menu (also drops the room, so an online player
+  // isn't left sitting in a lobby they've walked away from)
+  $('menu-btn').addEventListener('click', () => {
+    if (netRole) leaveLobby();
+    quitToMenu();
+  });
   $('host-btn').addEventListener('click', hostGame);
   $('join-btn').addEventListener('click', joinGame);
   $('lobby-leave').addEventListener('click', () => leaveLobby());
@@ -472,6 +540,7 @@ async function boot() {
           v.input.fireMG = !!d.mg;
           v.input.fireMissile = !!d.mi;
           v.input.dropMine = !!d.mn;
+          if (d.ts) v.lastInputTs = d.ts;   // echoed in snapshots → guest RTT
           if (remoteSpecial.has(idx)) {
             v.input.special = true;
             remoteSpecial.delete(idx);
@@ -503,16 +572,26 @@ async function boot() {
     lastRenderAt = now;
 
     if (netRole === 'guest') {
+      // send inputs every frame (tiny payload, halves the upstream delay) and
+      // stamp them so the host's echo gives us a live RTT measurement
+      net?.send({
+        t: 'input',
+        d: {
+          th: input.throttle, st: input.steer, hb: input.handbrake, tu: input.turbo,
+          mg: input.fireMG, mi: input.fireMissile, mn: input.dropMine, sp: input.consumeSpecial(),
+          ts: Math.round(performance.now()),
+        },
+      });
+      // predict our own car locally at the sim's fixed timestep, then let the
+      // reconciler nudge it toward the host's authoritative state
+      let gdt = (now - last) / 1000;
       last = now;
-      // thin client: send inputs, render interpolated host snapshots
-      if (frameCount % 2 === 0) {
-        net?.send({
-          t: 'input',
-          d: {
-            th: input.throttle, st: input.steer, hb: input.handbrake, tu: input.turbo,
-            mg: input.fireMG, mi: input.fireMissile, mn: input.dropMine, sp: input.consumeSpecial(),
-          },
-        });
+      if (gdt > 0.1) gdt = 0.1;
+      accumulator += gdt;
+      while (accumulator >= FIXED_DT) {
+        game.predictLocal(FIXED_DT, input);
+        guestSync?.applyCorrection(FIXED_DT);
+        accumulator -= FIXED_DT;
       }
       guestSync?.update();
       game.render(rdt);
@@ -537,6 +616,8 @@ async function boot() {
     if (now - last < 45) return;   // rAF is alive — let it drive
     simAdvance(now);
   };
+
+  await loading.done('READY');
 }
 
 boot();
