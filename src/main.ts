@@ -335,15 +335,19 @@ async function boot() {
         netRole = 'guest';
       });
       net.on('lobby', (m) => {
-        lobby = {
-          code: net!.code,
-          players: m.peers.map((p: any) => ({ id: p.id, name: p.name, specId: p.specId, isHost: p.host })),
-        };
-        lobby.players.push({ id: net!.id, name: playerName(), specId: selectedSpec.id, isHost: false });
+        const players = m.peers.map((p: any) => ({ id: p.id, name: p.name, specId: p.specId, isHost: p.host }));
+        // the server's roster already contains us — only add ourselves if it
+        // somehow doesn't, or we show up twice in our own lobby list
+        if (!players.some((p: any) => p.id === net!.id)) {
+          players.push({ id: net!.id, name: playerName(), specId: selectedSpec.id, isHost: false });
+        }
+        lobby = { code: net!.code, players };
         updateLobbyUI();
       });
       net.on('peer-join', (m) => {
-        lobby?.players.push({ id: m.id, name: m.name, specId: m.specId, isHost: false });
+        if (lobby && !lobby.players.some((p) => p.id === m.id)) {
+          lobby.players.push({ id: m.id, name: m.name, specId: m.specId, isHost: false });
+        }
         updateLobbyUI();
       });
       net.on('host-left', () => {
@@ -601,7 +605,8 @@ async function boot() {
 
     simAdvance(now);
     game.render(rdt);
-    renderer.render(game.scene, game.camera);
+    // must match the guest path — plain renderer.render skips bloom entirely
+    renderComposed(game.scene, game.camera);
   }
   requestAnimationFrame(frame);
 
