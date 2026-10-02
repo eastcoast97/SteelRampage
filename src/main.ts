@@ -4,6 +4,8 @@ import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
+import { GTAOPass } from 'three/examples/jsm/postprocessing/GTAOPass.js';
+import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js';
 import { Game, FIXED_DT, MODES, type GameMode, type RosterEntry } from './game/game';
 import { CAR_SPECS, BOT_NAMES, type CarSpec } from './game/specs';
 import { ARENAS, loadSurfaceTextures } from './game/arena';
@@ -87,21 +89,87 @@ async function boot() {
   renderer.toneMappingExposure = 1.35;
   $('app').appendChild(renderer.domElement);
 
-  // --- post-processing: bloom makes neon / turbo / explosions / sun glow ---
+  // --- post-processing chain: AO → bloom → tonemap → grade ---
   const composer = new EffectComposer(renderer);
   const renderPass = new RenderPass(new THREE.Scene(), new THREE.PerspectiveCamera());
+
+  // Ambient occlusion: contact darkening where surfaces meet (wheel wells,
+  // curbs, building bases, under cars). Single biggest "grounded" cue there is.
+  // radius is in WORLD units — tuned to vehicle scale (~4m long), not the
+  // library default which assumes a small desktop scene.
+  const gtaoPass = new GTAOPass(
+    new THREE.Scene(), new THREE.PerspectiveCamera(),
+    window.innerWidth, window.innerHeight,
+  );
+  gtaoPass.updateGtaoMaterial({ radius: 0.55, distanceExponent: 1.4, thickness: 1.0, scale: 1.0, samples: 16 });
+  gtaoPass.blendIntensity = 0.85;
+
+  // Bloom runs on the LINEAR HDR buffer (before tonemapping), so the threshold
+  // is in scene-light units, not screen units. Those units differ hugely
+  // between sky presets: the sunbaked/day sun is 3.2-3.8 intensity, so lit
+  // surfaces sit around 2-3 linear and a low threshold turns the whole frame
+  // into fog. Night scenes are dark, so emissives (1.5-2.4) stand out on their
+  // own. Hence per-preset tuning — matching arena.ts SKY_PRESETS order.
+  const BLOOM_BY_SKY: { threshold: number; strength: number }[] = [
+    { threshold: 3.0, strength: 0.30 },   // 0 sunbaked — daylight, barely any glow
+    { threshold: 2.6, strength: 0.32 },   // 1 day
+    { threshold: 0.95, strength: 0.60 },  // 2 night — neon/windows carry the look
+    { threshold: 0.90, strength: 0.70 },  // 3 neonNight (docks)
+  ];
   const bloomPass = new UnrealBloomPass(
     new THREE.Vector2(window.innerWidth, window.innerHeight),
-    0.62,   // strength
-    0.5,    // radius
-    0.88,   // threshold — only genuinely bright pixels bloom (lit windows,
-            // neon, turbo, explosions) — lower values blow out sunlit surfaces
+    BLOOM_BY_SKY[0].strength, 0.5, BLOOM_BY_SKY[0].threshold,
   );
+  const applyBloomForSky = (skyIdx: number) => {
+    const b = BLOOM_BY_SKY[skyIdx] ?? BLOOM_BY_SKY[0];
+    bloomPass.threshold = b.threshold;
+    bloomPass.strength = b.strength;
+  };
+
+  // Film grade, applied AFTER tonemapping so the numbers behave predictably:
+  // slight S-curve, a touch more colour, cool shadows / warm highlights, vignette.
+  const gradePass = new ShaderPass({
+    uniforms: {
+      tDiffuse: { value: null },
+      exposure: { value: 1.02 },
+      contrast: { value: 1.09 },
+      saturation: { value: 1.1 },
+      shadowTint: { value: new THREE.Vector3(0.94, 0.97, 1.08) },
+      highlightTint: { value: new THREE.Vector3(1.06, 1.01, 0.95) },
+      vignette: { value: 0.38 },
+    },
+    vertexShader: `
+      varying vec2 vUv;
+      void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }
+    `,
+    fragmentShader: `
+      uniform sampler2D tDiffuse;
+      uniform float exposure, contrast, saturation, vignette;
+      uniform vec3 shadowTint, highlightTint;
+      varying vec2 vUv;
+      void main() {
+        vec4 texel = texture2D(tDiffuse, vUv);
+        vec3 c = texel.rgb * exposure;
+        c = (c - 0.5) * contrast + 0.5;                       // S-curve about mid grey
+        float l = dot(c, vec3(0.2126, 0.7152, 0.0722));
+        c = mix(vec3(l), c, saturation);
+        c *= mix(shadowTint, highlightTint, smoothstep(0.0, 0.85, l));  // split tone
+        vec2 d = vUv - 0.5;
+        c *= clamp(1.0 - dot(d, d) * vignette, 0.0, 1.0);     // vignette
+        gl_FragColor = vec4(clamp(c, 0.0, 1.0), texel.a);
+      }
+    `,
+  });
+
   composer.addPass(renderPass);
+  composer.addPass(gtaoPass);
   composer.addPass(bloomPass);
   composer.addPass(new OutputPass());
+  composer.addPass(gradePass);
   composer.setSize(window.innerWidth, window.innerHeight);
   composer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  // debug/tuning handle: toggle passes and tweak grade uniforms live
+  (window as any).__fx = { composer, gtaoPass, bloomPass, gradePass, renderPass };
 
   // --- reflection environment: real PBR reflections on metal + car paint ---
   const pmrem = new THREE.PMREMGenerator(renderer);
@@ -133,6 +201,7 @@ async function boot() {
   const hdriEnvs: (THREE.Texture | null | 'loading')[] = [null, null];
   const HDRI_FILES = [assetUrl('textures/town_env_1k.hdr'), assetUrl('textures/docks_env_1k.hdr')];
   const applyEnv = (g: Game) => {
+    applyBloomForSky(g.arena.skyIdx);
     const idx = g.arenaIdx ?? 0;
     const cached = hdriEnvs[idx];
     if (cached && cached !== 'loading') { g.scene.environment = cached; return; }
@@ -151,8 +220,12 @@ async function boot() {
   };
 
   function renderComposed(scene: THREE.Scene, camera: THREE.Camera) {
+    // the Game (and so its scene/camera) is rebuilt per match — both passes
+    // read these per render, so repoint them every frame
     renderPass.scene = scene;
     renderPass.camera = camera;
+    gtaoPass.scene = scene;
+    gtaoPass.camera = camera as THREE.PerspectiveCamera;
     composer.render();
   }
 

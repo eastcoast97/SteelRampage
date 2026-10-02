@@ -11,9 +11,25 @@ export interface CarModel {
   wheel: THREE.Object3D;
 }
 
+/** Yaw correction (radians) applied at load time for models that don't come in
+ *  with their length along -Z. AI-generated meshes in particular arrive on an
+ *  arbitrary axis — the Higgsfield car's length is along X, so it needs a
+ *  quarter turn before carMesh measures and scales it. */
+const MODEL_YAW: Partial<Record<CarSpec['build'], number>> = {
+  muscle: -Math.PI / 2,   // length on X, nose at -X → quarter turn puts it on -Z
+};
+
+/** Builds whose GLB ships its own authored PBR textures (AI-generated or
+ *  hand-authored). Their materials must be left ALONE — no palette retint, no
+ *  shared scratch roughness map, or we'd paint over the real maps. */
+export const AUTHORED_TEXTURES = new Set<CarSpec['build']>(['muscle']);
+/** Builds whose GLB already contains wheels, so the steer/spin rig must not
+ *  mount a second set on top. */
+export const WHEELS_BAKED_IN = new Set<CarSpec['build']>(['muscle']);
+
 const BODY_FILES: Record<CarSpec['build'], string> = {
   speed: 'race',
-  muscle: 'hero-body',   // custom Blender-built body (see docs/BLENDER.md)
+  muscle: 'hellcat-ai',  // Higgsfield-generated photoreal body (see docs/BLENDER.md)
   sports: 'race-future',
   suv: 'police',
   tank: 'truck',
@@ -179,6 +195,10 @@ export async function loadCarModels(): Promise<void> {
         }
       });
       toRemove.forEach((o) => o.parent?.remove(o));
+      // orient before anything downstream measures it (carMesh scales off the
+      // Z extent, so the model must already have its length on Z)
+      const yaw = MODEL_YAW[b];
+      if (yaw) body.rotation.y = yaw;
       library!.set(b, { body, wheel: wheelByName.get(WHEEL_FILES[b])! });
     });
   } catch (err) {

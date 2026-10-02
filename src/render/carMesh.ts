@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import type { CarSpec } from '../game/specs';
-import { getCarModel, getTintedTexture, getWeatheredStockTexture } from './carModels';
+import { getCarModel, getTintedTexture, getWeatheredStockTexture, AUTHORED_TEXTURES, WHEELS_BAKED_IN } from './carModels';
 
 /** models whose stock paint IS their identity (police livery, ambulance, taxi) */
 const KEEP_STOCK_PAINT = new Set<CarSpec['build']>(['suv', 'ambulance', 'taxi']);
@@ -97,12 +97,23 @@ function buildFromModel(spec: CarSpec, model: { body: THREE.Group; wheel: THREE.
   // --- body: scale to the physics footprint, sit on the ground line ---
   const body = model.body.clone(true);
   // per-vehicle paint job + rigid brushed-metal surface treatment
+  const authored = AUTHORED_TEXTURES.has(spec.build);
   const tinted = KEEP_STOCK_PAINT.has(spec.build) ? null : getTintedTexture(spec.color);
   const scratch = getCarScratchMap();
   body.traverse((o) => {
     const mesh = o as THREE.Mesh;
     if (!mesh.isMesh) return;
     const m = (mesh.material as THREE.MeshStandardMaterial).clone();
+    if (authored) {
+      // ships its own baseColor/normal/metalRoughness maps — only boost env
+      // reflections and kill any stray emissive (an emissiveFactor of 1,1,1
+      // with a non-black map would make the whole car glow under bloom)
+      m.envMapIntensity = 1.35;
+      m.emissive = new THREE.Color(0x000000);
+      m.emissiveIntensity = 0;
+      mesh.material = m;
+      return;
+    }
     // Kenney kit models are UV-mapped to a shared palette → retint that map.
     // Custom Blender models have no map → just set the paint colour directly.
     // Every palette gets the battle-wear pass (grime/rust/chips).
@@ -280,6 +291,9 @@ function buildFromModel(spec: CarSpec, model: { body: THREE.Group; wheel: THREE.
 
   // --- wheels from the kit, mounted on our steer/spin rig ---
   const wheels: THREE.Object3D[] = [];
+  // models with wheels already in the mesh get none — vehicle.ts loops over
+  // this array, so an empty one simply skips the spin/steer visuals
+  if (WHEELS_BAKED_IN.has(spec.build)) return { group, wheels };
   const targetR = spec.build === 'tank' || spec.build === 'suv' ? 0.32 : 0.27;
   const wbox = new THREE.Box3().setFromObject(model.wheel);
   const rawR = (wbox.max.y - wbox.min.y) / 2;
