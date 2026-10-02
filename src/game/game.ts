@@ -1715,6 +1715,19 @@ export class Game {
         this.towerPivot.setRotationFromAxisAngle(axis, (Math.PI / 2) * t * t);
       }
     }
+    // emitter lights for the player's own effects (player only — each extra
+    // light costs across every lit material in the scene)
+    {
+      const me = this.player;
+      const flaming = me.alive && me.spec.specialId === 'flame' && me.specialActiveTime > 0;
+      this.effects.glow('flame',
+        flaming ? me.position.clone().addScaledVector(me.forward, me.spec.size.z + 1.4).setY(me.position.y + 0.5) : null,
+        0xff6a18, 95, 20);
+      const boosting = me.alive && me.input.turbo && me.turboMeter > 0.05;
+      this.effects.glow('turbo',
+        boosting ? me.position.clone().addScaledVector(me.forward, -(me.spec.size.z + 0.6)).setY(me.position.y + 0.25) : null,
+        0x7fd4ff, 55, 13);
+    }
     for (const v of this.vehicles) {
       v.syncVisual();
       // post-spawn invulnerability: blink the car so it reads as protected

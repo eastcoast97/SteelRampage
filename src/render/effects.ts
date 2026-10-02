@@ -39,6 +39,10 @@ export class Effects {
   private tracers: { line: THREE.Line; mat: THREE.LineBasicMaterial; life: number }[] = [];
   private flashLight: THREE.PointLight;
   private flashTimer = 0;
+  /** continuous emitter lights (flamethrower, turbo) driven per render frame —
+   *  explosions get the one-shot flashLight instead */
+  private glows = new Map<string, THREE.PointLight>();
+  private glowScene: THREE.Scene | null = null;
 
   /** camera shake 0..1 */
   trauma = 0;
@@ -92,6 +96,7 @@ export class Effects {
 
     this.flashLight = new THREE.PointLight(0xffaa44, 0, 40, 1.8);
     scene.add(this.flashLight);
+    this.glowScene = scene;
   }
 
   private emit(
@@ -214,6 +219,28 @@ export class Effects {
     t.life = 0.07;
     t.mat.opacity = 0.9;
     t.line.visible = true;
+  }
+
+  /**
+   * Position a named continuous light, or pass pos=null to switch it off.
+   * Lights are created lazily and reused, so this is safe to call every frame.
+   * Flames and turbo plumes previously emitted no light at all, which read as
+   * fake at night — the glow is what sells them as a real light source.
+   */
+  glow(key: string, pos: THREE.Vector3 | null, color: number, intensity: number, distance: number) {
+    let l = this.glows.get(key);
+    if (!l) {
+      if (!pos || !this.glowScene) return;
+      l = new THREE.PointLight(color, 0, distance, 2);
+      this.glowScene.add(l);
+      this.glows.set(key, l);
+    }
+    if (!pos) { l.intensity = 0; return; }
+    l.color.setHex(color);
+    l.distance = distance;
+    l.position.copy(pos);
+    // ease in/out so a flicker of input doesn't pop the light
+    l.intensity += (intensity - l.intensity) * 0.35;
   }
 
   update(dt: number) {

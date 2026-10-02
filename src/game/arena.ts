@@ -82,9 +82,11 @@ const PBR_BY_MATERIAL: Record<string, { set: string; tint: number; tile: number;
   BldgWall:   { set: 'concrete', tint: 0x9a968e, tile: 4.0 },
   Wall:       { set: 'concrete', tint: 0x8d8a84, tile: 5.0 },
   TunnelWall: { set: 'concrete', tint: 0x8a8580, tile: 3.6 },
-  WhWall:     { set: 'iron',     tint: 0x8894a4, tile: 2.6, rough: 0.72, metal: 0.45 },
-  WhWall2:    { set: 'iron',     tint: 0xa07a68, tile: 2.6, rough: 0.8,  metal: 0.4 },
-  Tank:       { set: 'iron',     tint: 0xb0aca2, tile: 3.2, rough: 0.65, metal: 0.5 },
+  // docks tints run brighter than they look on paper: the neon-night preset has
+  // very low ambient, so mid-grey walls render as a black void
+  WhWall:     { set: 'iron',     tint: 0xc8d4e8, tile: 2.6, rough: 0.72, metal: 0.45 },
+  WhWall2:    { set: 'iron',     tint: 0xe0a890, tile: 2.6, rough: 0.8,  metal: 0.4 },
+  Tank:       { set: 'iron',     tint: 0xd8d4c8, tile: 3.2, rough: 0.65, metal: 0.5 },
 };
 
 /** Swap in photoscanned PBR for the arena's wall materials. Emissive/neon/
@@ -109,7 +111,9 @@ function applyArenaPBR(root: THREE.Object3D): void {
         roughness: rule.rough ?? 0.95,
         metalness: rule.metal ?? 0.0,
         normalScale: new THREE.Vector2(1.1, 1.1),
-        envMapIntensity: 0.55,
+        // the HDRI does a lot of the lifting at night — without this the docks
+        // walls get no light at all
+        envMapIntensity: 0.95,
       });
       cache.set(src.name, mat);
     }

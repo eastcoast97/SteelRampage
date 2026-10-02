@@ -114,7 +114,9 @@ async function boot() {
     { threshold: 3.0, strength: 0.30 },   // 0 sunbaked — daylight, barely any glow
     { threshold: 2.6, strength: 0.32 },   // 1 day
     { threshold: 0.95, strength: 0.60 },  // 2 night — neon/windows carry the look
-    { threshold: 0.90, strength: 0.70 },  // 3 neonNight (docks)
+    { threshold: 1.05, strength: 0.55 },  // 3 neonNight (docks) — lit windows
+                                          // were blowing into white slabs
+
   ];
   const bloomPass = new UnrealBloomPass(
     new THREE.Vector2(window.innerWidth, window.innerHeight),
