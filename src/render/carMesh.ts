@@ -294,7 +294,9 @@ function buildFromModel(spec: CarSpec, model: { body: THREE.Group; wheel: THREE.
   // models with wheels already in the mesh get none — vehicle.ts loops over
   // this array, so an empty one simply skips the spin/steer visuals
   if (WHEELS_BAKED_IN.has(spec.build)) return { group, wheels };
-  const targetR = spec.build === 'tank' || spec.build === 'suv' ? 0.32 : 0.27;
+  const targetR = spec.build === 'tank' || spec.build === 'suv' ? 0.32
+    : spec.build === 'muscle' ? 0.30   // chunky off-road tyres on the AI body
+    : 0.27;
   const wbox = new THREE.Box3().setFromObject(model.wheel);
   const rawR = (wbox.max.y - wbox.min.y) / 2;
   const ws = targetR / rawR;

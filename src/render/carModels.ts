@@ -24,8 +24,17 @@ const MODEL_YAW: Partial<Record<CarSpec['build'], number>> = {
  *  shared scratch roughness map, or we'd paint over the real maps. */
 export const AUTHORED_TEXTURES = new Set<CarSpec['build']>(['muscle']);
 /** Builds whose GLB already contains wheels, so the steer/spin rig must not
- *  mount a second set on top. */
-export const WHEELS_BAKED_IN = new Set<CarSpec['build']>(['muscle']);
+ *  mount a second set on top. (The AI muscle body had its wheels boolean-cut
+ *  out in Blender — see tools/blender/cut_wheels.py — so it is NOT in here.) */
+export const WHEELS_BAKED_IN = new Set<CarSpec['build']>([]);
+
+/** Yaw correction for wheel models, same reason as MODEL_YAW: the rig expects
+ *  the axle along X, and an AI wheel generated from a face-on image comes out
+ *  with its axle along Z. Keyed by FILE (not build) because several builds
+ *  share one wheel model — rotating a shared group would move all of them. */
+const WHEEL_YAW_BY_FILE: Record<string, number> = {
+  'hellcat-wheel': Math.PI / 2,
+};
 
 const BODY_FILES: Record<CarSpec['build'], string> = {
   speed: 'race',
@@ -40,7 +49,7 @@ const BODY_FILES: Record<CarSpec['build'], string> = {
 
 const WHEEL_FILES: Record<CarSpec['build'], string> = {
   speed: 'wheel-racing',
-  muscle: 'hero-wheel',
+  muscle: 'hellcat-wheel',   // AI-generated spiked armored wheel
   sports: 'wheel-racing',
   suv: 'wheel-default',
   tank: 'wheel-truck',
@@ -165,7 +174,8 @@ export async function loadCarModels(): Promise<void> {
     const wheelNames = [...new Set(Object.values(WHEEL_FILES))];
     const [bodies, wheels, bldg, arena, docks] = await Promise.all([
       Promise.all(builds.map((b) => load(BODY_FILES[b]))),
-      Promise.all(wheelNames.map((w) => load(w))),
+      // a missing wheel file must not take the whole car library down with it
+      Promise.all(wheelNames.map((w) => load(w).catch(() => null))),
       // arena assets authored in Blender — failure here must not block cars
       load('arena-building').catch(() => null),
       load('arena').catch(() => null),
@@ -174,7 +184,14 @@ export async function loadCarModels(): Promise<void> {
     arenaBuilding = bldg;
     arenaScenes[0] = arena;
     arenaScenes[1] = docks;
-    const wheelByName = new Map(wheelNames.map((n, i) => [n, wheels[i]]));
+    const wheelByName = new Map<string, THREE.Group>();
+    wheelNames.forEach((n, i) => {
+      const w = wheels[i];
+      if (!w) return;
+      const wy = WHEEL_YAW_BY_FILE[n];
+      if (wy) w.rotation.y = wy;   // before anything measures its bbox
+      wheelByName.set(n, w);
+    });
     library = new Map();
     builds.forEach((b, i) => {
       const body = bodies[i];
@@ -199,7 +216,8 @@ export async function loadCarModels(): Promise<void> {
       // Z extent, so the model must already have its length on Z)
       const yaw = MODEL_YAW[b];
       if (yaw) body.rotation.y = yaw;
-      library!.set(b, { body, wheel: wheelByName.get(WHEEL_FILES[b])! });
+      const wheel = wheelByName.get(WHEEL_FILES[b]) ?? wheelByName.get('wheel-default');
+      if (wheel) library!.set(b, { body, wheel });
     });
   } catch (err) {
     console.warn('Car models failed to load — falling back to procedural bodies', err);
