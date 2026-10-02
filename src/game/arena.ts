@@ -22,7 +22,104 @@ export const SURFACE_IMAGES: {
   concreteDiff?: HTMLImageElement;
 } = {};
 
+/** Poly Haven wall photoscans, loaded as THREE textures for the arena's
+ *  building materials (see applyArenaPBR). */
+export const WALL_MAPS: Record<string, { map?: THREE.Texture; normalMap?: THREE.Texture; roughnessMap?: THREE.Texture }> = {};
+
+async function loadWallMaps(): Promise<void> {
+  const tl = new THREE.TextureLoader();
+  const grab = (p: string) => new Promise<THREE.Texture | undefined>((res) =>
+    tl.load(assetUrl(p), (t) => {
+      t.wrapS = t.wrapT = THREE.RepeatWrapping;
+      res(t);
+    }, undefined, () => res(undefined)));
+  const sets: [string, string, string, string][] = [
+    ['brick', 'brick_wall_001_diffuse_1k.jpg', 'brick_wall_001_nor_gl_1k.jpg', 'brick_wall_001_rough_1k.jpg'],
+    ['concrete', 'concrete_block_wall_diff_1k.jpg', 'concrete_block_wall_nor_gl_1k.jpg', 'concrete_block_wall_rough_1k.jpg'],
+    ['iron', 'corrugated_iron_02_diff_1k.jpg', 'corrugated_iron_02_nor_gl_1k.jpg', 'corrugated_iron_02_rough_1k.jpg'],
+  ];
+  await Promise.all(sets.map(async ([key, d, n, r]) => {
+    const [map, normalMap, roughnessMap] = await Promise.all([
+      grab(`textures/${d}`), grab(`textures/${n}`), grab(`textures/${r}`),
+    ]);
+    if (map) map.colorSpace = THREE.SRGBColorSpace;
+    WALL_MAPS[key] = { map, normalMap, roughnessMap };
+  }));
+}
+
+/**
+ * Replace flat-coloured GLB wall materials with real PBR photoscans.
+ *
+ * The arena GLBs are exported with transforms baked into vertex data, so a
+ * mesh's positions ARE world coordinates — which makes box projection trivial
+ * and gives every building consistent real-world texture scale. The original
+ * box UVs are useless for this (Blender cubes get 0..1 per face, so one brick
+ * tile would stretch across a whole 12m wall).
+ */
+function boxProjectUVs(geo: THREE.BufferGeometry, metresPerTile: number): void {
+  const pos = geo.attributes.position;
+  const nor = geo.attributes.normal;
+  if (!pos || !nor) return;
+  const uv = new Float32Array(pos.count * 2);
+  for (let i = 0; i < pos.count; i++) {
+    const x = pos.getX(i), y = pos.getY(i), z = pos.getZ(i);
+    const nx = Math.abs(nor.getX(i)), ny = Math.abs(nor.getY(i)), nz = Math.abs(nor.getZ(i));
+    let u: number, v: number;
+    if (ny >= nx && ny >= nz) { u = x; v = z; }        // roof / floor
+    else if (nx >= nz) { u = z; v = y; }               // wall facing X
+    else { u = x; v = y; }                             // wall facing Z
+    uv[i * 2] = u / metresPerTile;
+    uv[i * 2 + 1] = v / metresPerTile;
+  }
+  geo.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+}
+
+/** material name → which photoscan to use, its tint, and tile size in metres */
+const PBR_BY_MATERIAL: Record<string, { set: string; tint: number; tile: number; rough?: number; metal?: number }> = {
+  Brick:      { set: 'brick',    tint: 0xb08878, tile: 3.2 },
+  Terra:      { set: 'brick',    tint: 0xc08860, tile: 3.4 },
+  Cream:      { set: 'concrete', tint: 0xcfc3a8, tile: 4.0 },
+  BldgWall:   { set: 'concrete', tint: 0x9a968e, tile: 4.0 },
+  Wall:       { set: 'concrete', tint: 0x8d8a84, tile: 5.0 },
+  TunnelWall: { set: 'concrete', tint: 0x8a8580, tile: 3.6 },
+  WhWall:     { set: 'iron',     tint: 0x8894a4, tile: 2.6, rough: 0.72, metal: 0.45 },
+  WhWall2:    { set: 'iron',     tint: 0xa07a68, tile: 2.6, rough: 0.8,  metal: 0.4 },
+  Tank:       { set: 'iron',     tint: 0xb0aca2, tile: 3.2, rough: 0.65, metal: 0.5 },
+};
+
+/** Swap in photoscanned PBR for the arena's wall materials. Emissive/neon/
+ *  glass materials are deliberately left alone — they carry the art direction. */
+function applyArenaPBR(root: THREE.Object3D): void {
+  const cache = new Map<string, THREE.MeshStandardMaterial>();
+  root.traverse((o) => {
+    const mesh = o as THREE.Mesh;
+    if (!mesh.isMesh) return;
+    const src = mesh.material as THREE.MeshStandardMaterial;
+    const rule = PBR_BY_MATERIAL[src?.name];
+    if (!rule) return;
+    const maps = WALL_MAPS[rule.set];
+    if (!maps?.map) return;
+    let mat = cache.get(src.name);
+    if (!mat) {
+      mat = new THREE.MeshStandardMaterial({
+        map: maps.map,
+        normalMap: maps.normalMap,
+        roughnessMap: maps.roughnessMap,
+        color: new THREE.Color(rule.tint),
+        roughness: rule.rough ?? 0.95,
+        metalness: rule.metal ?? 0.0,
+        normalScale: new THREE.Vector2(1.1, 1.1),
+        envMapIntensity: 0.55,
+      });
+      cache.set(src.name, mat);
+    }
+    boxProjectUVs(mesh.geometry as THREE.BufferGeometry, rule.tile);
+    mesh.material = mat;
+  });
+}
+
 export async function loadSurfaceTextures(): Promise<void> {
+  await loadWallMaps();
   const load = (src: string) => new Promise<HTMLImageElement | undefined>((resolve) => {
     const img = new Image();
     img.onload = () => resolve(img);
@@ -300,6 +397,7 @@ function consumeArenaGLB(
     }
   });
   for (const o of strip) o.parent?.remove(o);
+  applyArenaPBR(root);
   scene.add(root);
   return { spawnPoints, pickupPoints, barrelPoints, pedZones, boostPads, pumpPoints, towerBody };
 }
