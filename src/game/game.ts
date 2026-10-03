@@ -286,9 +286,10 @@ export class Game {
 
   private spawnVehicle(spec: CarSpec, pos: THREE.Vector3, yaw: number, name: string, isBot: boolean, color?: number): Vehicle {
     const v = new Vehicle(this.world, spec, pos, yaw, name, isBot);
-    const { group, wheels } = buildCarMesh(spec, color);
+    const { group, wheels, wheelRadius } = buildCarMesh(spec, color);
     v.mesh = group;
     v.wheels = wheels;
+    v.visualWheelRadius = wheelRadius;
     // shield: hex-cell energy field hugging the car (mostly invisible —
     // the hex lattice reads on the rim, flares white when it eats a hit)
     const bubble = new THREE.Mesh(

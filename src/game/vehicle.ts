@@ -101,6 +101,10 @@ export class Vehicle {
   /** visual */
   mesh: THREE.Group | null = null;
   wheels: THREE.Object3D[] = [];
+  /** Visual tyre radius, which is sized to the body's wheel well and so is
+   *  usually BIGGER than the physics WHEEL_RADIUS. syncVisual lifts the wheel
+   *  by the difference; without that the tyre hangs below the road surface. */
+  visualWheelRadius = WHEEL_RADIUS;
   wheelCompression = [0, 0, 0, 0];
   wheelSteer = 0;
   wheelSpin = 0;
@@ -470,7 +474,9 @@ export class Vehicle {
       const w = this.wheels[i];
       const comp = this.wheelCompression[i];
       const drop = comp > 0 ? REST_LEN + WHEEL_RADIUS - comp - WHEEL_RADIUS : REST_LEN * 0.7;
-      w.position.y = this.wheelAnchors[i].y - drop;
+      // the suspension solves for a WHEEL_RADIUS tyre; a visually larger one
+      // has to ride that much higher or it buries itself in the road
+      w.position.y = this.wheelAnchors[i].y - drop + (this.visualWheelRadius - WHEEL_RADIUS);
       w.rotation.set(0, i < 2 ? this.wheelSteer : 0, 0);
       w.children[0]?.rotation.set(this.wheelSpin % (Math.PI * 2), 0, 0);
     }

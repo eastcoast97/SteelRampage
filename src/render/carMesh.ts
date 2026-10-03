@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import type { CarSpec } from '../game/specs';
 import { getCarModel, getTintedTexture, getWeatheredStockTexture, AUTHORED_TEXTURES, WHEELS_BAKED_IN } from './carModels';
+import { getWheelWell, WELL_RADIUS_FRAC, WELL_FILL } from './wheelWells';
 
 /** models whose stock paint IS their identity (police livery, ambulance, taxi) */
 const KEEP_STOCK_PAINT = new Set<CarSpec['build']>(['suv', 'ambulance', 'taxi']);
@@ -87,12 +88,29 @@ function extrudeProfile(pts: Pt[], width: number, mat: THREE.Material, bevel = 0
 }
 
 /** build from a real GLB model (Kenney Car Kit) + our combat gear on top */
-function buildFromModel(spec: CarSpec, model: { body: THREE.Group; wheel: THREE.Object3D }): { group: THREE.Group; wheels: THREE.Object3D[] } {
+/** A built car: the mesh group, the four steer/spin wheel pivots, and the
+ *  visual tyre radius. The radius matters to vehicle.ts: the physics wheel is a
+ *  fixed 0.26 but the visual one is sized to the body's wheel well, so the
+ *  suspension has to lift the wheel by the difference or the tyre sinks into
+ *  the road (measured 0.19m under it before this was plumbed through). */
+export interface CarMeshResult {
+  group: THREE.Group;
+  wheels: THREE.Object3D[];
+  wheelRadius: number;
+}
+
+function buildFromModel(spec: CarSpec, model: { body: THREE.Group; wheel: THREE.Object3D }): CarMeshResult {
   const group = new THREE.Group();
   const { x: sx, y: sy, z: sz } = spec.size;
 
   const darkMat = new THREE.MeshStandardMaterial({ color: 0x17151d, roughness: 0.85 });
-  const steelMat = new THREE.MeshStandardMaterial({ color: 0x8f8a80, roughness: 0.3, metalness: 0.85 });
+  // The bolted-on kit sits right next to bodies carrying real photoscan PBR
+  // maps, so a flat colour reads as grey plastic — give the bare metal the same
+  // scratch roughness map the procedural bodies use, and take the polish down.
+  const steelMat = new THREE.MeshStandardMaterial({
+    color: 0x6e6961, roughness: 0.52, metalness: 0.8,
+    roughnessMap: getCarScratchMap(), envMapIntensity: 1.1,
+  });
 
   // --- body: scale to the physics footprint, sit on the ground line ---
   const body = model.body.clone(true);
@@ -145,8 +163,12 @@ function buildFromModel(spec: CarSpec, model: { body: THREE.Group; wheel: THREE.
   const hoodY = bbox.min.y + (bbox.max.y - bbox.min.y) * 0.62;
 
   // ================= WEAPONIZATION KIT (Twisted-Metal-style) =================
-  const gunMetal = new THREE.MeshStandardMaterial({ color: 0x23212a, roughness: 0.55, metalness: 0.7 });
-  const rustMat = new THREE.MeshStandardMaterial({ color: 0x4a3a2c, roughness: 0.9, metalness: 0.25 });
+  const gunMetal = new THREE.MeshStandardMaterial({
+    color: 0x23212a, roughness: 0.55, metalness: 0.7, roughnessMap: getCarScratchMap(),
+  });
+  const rustMat = new THREE.MeshStandardMaterial({
+    color: 0x4a3a2c, roughness: 0.9, metalness: 0.25, roughnessMap: getCarScratchMap(),
+  });
   const lampMat = new THREE.MeshStandardMaterial({ color: 0xffe9b8, emissive: 0xffc866, emissiveIntensity: 1.6 });
   const tailMat = new THREE.MeshStandardMaterial({ color: 0x7a0f0f, emissive: 0xff1a10, emissiveIntensity: 1.1, roughness: 0.35 });
 
@@ -185,8 +207,12 @@ function buildFromModel(spec: CarSpec, model: { body: THREE.Group; wheel: THREE.
   }
   box(0.36, 0.15, 0.03, new THREE.MeshStandardMaterial({ color: 0xd8d4c4, roughness: 0.6 }),
     0, hoodY - 0.18, sz + 0.17);                                                       // license plate
+  // Side armor skirts, hung off the BODY's own sill rather than the physics
+  // half-width — the AI bodies are narrower than their collider, so anchoring
+  // to sx left the skirt floating in space as a detached grey slab.
+  const sillX = ((bbox.max.x - bbox.min.x) / 2) * 0.9;
   for (const side of [-1, 1]) {
-    box(0.1, 0.18, sz * 1.15, darkMat, side * (sx * 0.98), -sy + 0.1, 0);              // side armor skirts
+    box(0.1, 0.18, sz * 0.95, darkMat, side * sillX, bbox.min.y + 0.22, 0);
   }
 
   // --- shared builders ---
@@ -293,18 +319,23 @@ function buildFromModel(spec: CarSpec, model: { body: THREE.Group; wheel: THREE.
   const wheels: THREE.Object3D[] = [];
   // models with wheels already in the mesh get none — vehicle.ts loops over
   // this array, so an empty one simply skips the spin/steer visuals
-  if (WHEELS_BAKED_IN.has(spec.build)) return { group, wheels };
-  const targetR = spec.build === 'tank' || spec.build === 'suv' ? 0.32
-    : spec.build === 'muscle' ? 0.30   // chunky off-road tyres on the AI body
-    : 0.27;
+  if (WHEELS_BAKED_IN.has(spec.build)) return { group, wheels, wheelRadius: 0 };
+  // Size and place the wheel from the well the Blender cut actually left in
+  // this body, not from a stock constant: the AI bodies carry monster-truck
+  // arches, so a stock 0.32 wheel sits lost inside one.
+  const well = getWheelWell(spec.build);
+  const halfLen = (bbox.max.z - bbox.min.z) / 2;
+  const halfWid = (bbox.max.x - bbox.min.x) / 2;
+  const targetR = halfLen * WELL_RADIUS_FRAC * WELL_FILL;
   const wbox = new THREE.Box3().setFromObject(model.wheel);
   const rawR = (wbox.max.y - wbox.min.y) / 2;
   const ws = targetR / rawR;
+  const trackX = halfWid * well.trackX;
   const anchors = [
-    [-sx * 0.85, -sy, -sz * 0.72],
-    [sx * 0.85, -sy, -sz * 0.72],
-    [-sx * 0.85, -sy, sz * 0.72],
-    [sx * 0.85, -sy, sz * 0.72],
+    [-trackX, -sy, halfLen * well.axleZ[0]],
+    [trackX, -sy, halfLen * well.axleZ[0]],
+    [-trackX, -sy, halfLen * well.axleZ[1]],
+    [trackX, -sy, halfLen * well.axleZ[1]],
   ];
   anchors.forEach(([wx, wy, wz], i) => {
     const pivot = new THREE.Group();
@@ -335,10 +366,10 @@ function buildFromModel(spec: CarSpec, model: { body: THREE.Group; wheel: THREE.
     wheels.push(pivot);
   });
 
-  return { group, wheels };
+  return { group, wheels, wheelRadius: targetR };
 }
 
-export function buildCarMesh(spec: CarSpec, colorOverride?: number): { group: THREE.Group; wheels: THREE.Object3D[] } {
+export function buildCarMesh(spec: CarSpec, colorOverride?: number): CarMeshResult {
   const model = getCarModel(spec.build);
   if (model) return buildFromModel(spec, model);
 
@@ -556,5 +587,5 @@ export function buildCarMesh(spec: CarSpec, colorOverride?: number): { group: TH
     wheels.push(pivot);
   }
 
-  return { group, wheels };
+  return { group, wheels, wheelRadius: wheelR };
 }
