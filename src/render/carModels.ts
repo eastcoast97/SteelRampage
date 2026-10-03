@@ -16,13 +16,24 @@ export interface CarModel {
  *  arbitrary axis — the Higgsfield car's length is along X, so it needs a
  *  quarter turn before carMesh measures and scales it. */
 const MODEL_YAW: Partial<Record<CarSpec['build'], number>> = {
-  muscle: -Math.PI / 2,   // length on X, nose at -X → quarter turn puts it on -Z
+  // every Higgsfield/Meshy car comes out with its length on X and nose at -X
+  // (they inherit the hero image's framing), so they all take the same turn
+  speed: -Math.PI / 2,
+  muscle: -Math.PI / 2,
+  sports: -Math.PI / 2,
+  suv: -Math.PI / 2,
+  tank: -Math.PI / 2,
+  hearse: -Math.PI / 2,
+  ambulance: -Math.PI / 2,
+  taxi: -Math.PI / 2,
 };
 
 /** Builds whose GLB ships its own authored PBR textures (AI-generated or
  *  hand-authored). Their materials must be left ALONE — no palette retint, no
  *  shared scratch roughness map, or we'd paint over the real maps. */
-export const AUTHORED_TEXTURES = new Set<CarSpec['build']>(['muscle']);
+export const AUTHORED_TEXTURES = new Set<CarSpec['build']>([
+  'speed', 'muscle', 'sports', 'suv', 'tank', 'hearse', 'ambulance', 'taxi',
+]);
 /** Builds whose GLB already contains wheels, so the steer/spin rig must not
  *  mount a second set on top. (The AI muscle body had its wheels boolean-cut
  *  out in Blender — see tools/blender/cut_wheels.py — so it is NOT in here.) */
@@ -36,26 +47,30 @@ const WHEEL_YAW_BY_FILE: Record<string, number> = {
   'hellcat-wheel': Math.PI / 2,
 };
 
+// Higgsfield-generated photoreal bodies, wheels boolean-cut out in Blender
+// (see docs/BLENDER.md + tools/blender/autocut_wheels.py). A missing file
+// degrades that one build to its procedural mesh.
 const BODY_FILES: Record<CarSpec['build'], string> = {
-  speed: 'race',
-  muscle: 'hellcat-ai',  // Higgsfield-generated photoreal body (see docs/BLENDER.md)
-  sports: 'race-future',
-  suv: 'police',
-  tank: 'truck',
-  hearse: 'van',
-  ambulance: 'ambulance',
-  taxi: 'taxi',
+  speed: 'viper-ai',
+  muscle: 'hellcat-ai',
+  sports: 'scorch-ai',
+  suv: 'rampart-ai',
+  tank: 'juggernaut-ai',
+  hearse: 'mortis-ai',
+  ambulance: 'medic-ai',
+  taxi: 'jackrabbit-ai',
 };
 
+// the AI spiked armored wheel is generic enough to serve the whole fleet
 const WHEEL_FILES: Record<CarSpec['build'], string> = {
-  speed: 'wheel-racing',
+  speed: 'hellcat-wheel',
   muscle: 'hellcat-wheel',   // AI-generated spiked armored wheel
-  sports: 'wheel-racing',
-  suv: 'wheel-default',
-  tank: 'wheel-truck',
-  hearse: 'wheel-default',
-  ambulance: 'wheel-default',
-  taxi: 'wheel-default',
+  sports: 'hellcat-wheel',
+  suv: 'hellcat-wheel',
+  tank: 'hellcat-wheel',
+  hearse: 'hellcat-wheel',
+  ambulance: 'hellcat-wheel',
+  taxi: 'hellcat-wheel',
 };
 
 let library: Map<string, CarModel> | null = null;
@@ -173,7 +188,9 @@ export async function loadCarModels(): Promise<void> {
     const builds = Object.keys(BODY_FILES) as CarSpec['build'][];
     const wheelNames = [...new Set(Object.values(WHEEL_FILES))];
     const [bodies, wheels, bldg, arena, docks] = await Promise.all([
-      Promise.all(builds.map((b) => load(BODY_FILES[b]))),
+      // per-body catch: one missing/!corrupt body degrades that single build to
+      // the procedural mesh instead of taking the whole library down
+      Promise.all(builds.map((b) => load(BODY_FILES[b]).catch(() => null))),
       // a missing wheel file must not take the whole car library down with it
       Promise.all(wheelNames.map((w) => load(w).catch(() => null))),
       // arena assets authored in Blender — failure here must not block cars
@@ -195,6 +212,7 @@ export async function loadCarModels(): Promise<void> {
     library = new Map();
     builds.forEach((b, i) => {
       const body = bodies[i];
+      if (!body) return;   // that build falls back to its procedural mesh
       // strip any wheels baked into the body scene (Kenney bodies are wheel-less,
       // but be safe) and enable shadows
       const toRemove: THREE.Object3D[] = [];
