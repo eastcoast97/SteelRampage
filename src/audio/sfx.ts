@@ -41,6 +41,11 @@ class Sfx {
   private ctx: AudioContext | null = null;
   private master: GainNode | null = null;
   private noiseBuf: AudioBuffer | null = null;
+  // continuous road voices, started once and driven by gain/filter from then on
+  private windGain: GainNode | null = null;
+  private windFilter: BiquadFilterNode | null = null;
+  private squealGain: GainNode | null = null;
+  private squealFilter: BiquadFilterNode | null = null;
   muted = false;
 
   // modular engine voice (rebuilt per vehicle profile)
@@ -80,6 +85,33 @@ class Sfx {
     this.noiseBuf = this.ctx.createBuffer(1, len, this.ctx.sampleRate);
     const d = this.noiseBuf.getChannelData(0);
     for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+
+    // Wind rush and tyre squeal are the two voices that make speed and grip
+    // audible. Both are one looping noise source each, started at init and
+    // never restarted — retriggering a source per frame clicks, and these need
+    // to track continuous values rather than fire as events.
+    const voice = (type: BiquadFilterType, freq: number, q: number) => {
+      const src = this.ctx!.createBufferSource();
+      src.buffer = this.noiseBuf;
+      src.loop = true;
+      const filter = this.ctx!.createBiquadFilter();
+      filter.type = type;
+      filter.frequency.value = freq;
+      filter.Q.value = q;
+      const gain = this.ctx!.createGain();
+      gain.gain.value = 0;
+      src.connect(filter).connect(gain).connect(this.master!);
+      src.start();
+      return { filter, gain };
+    };
+    // wind: broad band-passed rush, opens up as speed climbs
+    const wind = voice('bandpass', 700, 0.7);
+    this.windFilter = wind.filter;
+    this.windGain = wind.gain;
+    // squeal: narrow and resonant, so it reads as rubber rather than hiss
+    const squeal = voice('bandpass', 1750, 7.5);
+    this.squealFilter = squeal.filter;
+    this.squealGain = squeal.gain;
 
     this.buildEngineVoice();
     this.buildNitroVoice();
@@ -315,8 +347,27 @@ class Sfx {
     this.engGain.gain.setTargetAtTime(vol, t, 0.09);
   }
 
+  /**
+   * Road voices, driven every frame from the player's state.
+   * `speedN` 0..1, `slip` 0..1 is how far the tyres are sliding sideways.
+   */
+  road(speedN: number, slip: number, grounded: boolean) {
+    if (!this.ctx || !this.windGain || !this.squealGain) return;
+    const t = this.ctx.currentTime;
+    // wind only becomes audible once there is real speed, then climbs fast
+    const w = Math.max(0, speedN - 0.25) / 0.75;
+    this.windGain.gain.setTargetAtTime(w * w * 0.085, t, 0.12);
+    this.windFilter?.frequency.setTargetAtTime(600 + speedN * 1500, t, 0.12);
+    // squeal needs grip to be breaking AND the wheels to be on something
+    const sq = grounded ? Math.max(0, slip - 0.18) / 0.82 : 0;
+    this.squealGain.gain.setTargetAtTime(sq * sq * 0.07 * (0.35 + speedN), t, 0.05);
+    this.squealFilter?.frequency.setTargetAtTime(1500 + sq * 900 + speedN * 300, t, 0.05);
+  }
+
   engineOff() {
     if (!this.ctx || !this.engGain) return;
+    this.windGain?.gain.setTargetAtTime(0, this.ctx.currentTime, 0.1);
+    this.squealGain?.gain.setTargetAtTime(0, this.ctx.currentTime, 0.1);
     this.engGain.gain.setTargetAtTime(0, this.ctx.currentTime, 0.05);
     this.nitroGain?.gain.setTargetAtTime(0, this.ctx.currentTime, 0.05);
     this.revStop();

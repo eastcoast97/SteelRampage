@@ -1096,13 +1096,24 @@ export function buildArena(world: RAPIER.World, scene: THREE.Scene, forcedSkyIdx
   scene.add(floor);
 
   // --- roads: NFS-grade layered asphalt with specular sheen ---
+  /**
+   * Night asphalt should be the most reflective surface on screen — it is what
+   * neon and street lamps actually pool on — but it was rendering as matte as
+   * the daytime road. Dropping roughness and lifting metalness and env
+   * intensity on the dark presets lets the PMREM environment do the work
+   * without paying for screen-space reflections.
+   */
+  const wet = skyIdx >= 2;
   const roadMaterial = (kind: 'boulevard' | 'highway', repY: number) => {
     const maps = makeRoadMaps(kind);
     maps.map.repeat.set(1, repY);
     maps.rough.repeat.set(1, repY);
     return new THREE.MeshStandardMaterial({
-      map: maps.map, roughnessMap: maps.rough, roughness: 1,
-      metalness: 0.06, envMapIntensity: 0.75,
+      map: maps.map, roughnessMap: maps.rough,
+      roughness: wet ? 0.45 : 1,
+      metalness: wet ? 0.45 : 0.06,
+      envMapIntensity: wet ? 2.4 : 0.75,
+      color: wet ? 0x8f96a6 : 0xffffff,
     });
   };
 

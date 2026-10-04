@@ -187,6 +187,19 @@ export class Vehicle {
     return this.velocity.dot(this.forward);
   }
 
+  /**
+   * How far the tyres are sliding sideways, 0..1 — the fraction of the car's
+   * motion that is across its own axis rather than along it. Drives the tyre
+   * squeal; near 0 the car is tracking, near 1 it is fully sideways.
+   */
+  get slip(): number {
+    const v = this.velocity;
+    const sp = v.length();
+    if (sp < 2) return 0;
+    _right.set(1, 0, 0).applyQuaternion(this.quaternion);
+    return Math.min(1, Math.abs(v.dot(_right)) / sp);
+  }
+
   velocityAtPoint(point: THREE.Vector3, out: THREE.Vector3): THREE.Vector3 {
     const lv = this.body.linvel();
     const av = this.body.angvel();

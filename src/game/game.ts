@@ -1915,10 +1915,10 @@ export class Game {
     this.hud.update(dt, this.player, this.vehicles, this);
 
     if (this.player.alive && this.state === 'playing' && !this.paused) {
-      sfx.engine(
-        Math.min(1, this.player.speed / this.player.spec.topSpeed),
-        this.player.input.turbo && this.player.turboMeter > 0,
-      );
+      const speedN = Math.min(1, this.player.speed / this.player.spec.topSpeed);
+      sfx.engine(speedN, this.player.input.turbo && this.player.turboMeter > 0);
+      // wind rush and tyre squeal track continuous state, not events
+      sfx.road(speedN, this.player.slip, this.player.grounded);
     } else {
       sfx.engineOff();
     }
