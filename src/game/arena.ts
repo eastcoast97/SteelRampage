@@ -27,6 +27,18 @@ export const SURFACE_IMAGES: {
  *  building materials (see applyArenaPBR). */
 export const WALL_MAPS: Record<string, { map?: THREE.Texture; normalMap?: THREE.Texture; roughnessMap?: THREE.Texture }> = {};
 
+/** AI-generated roadside artwork, keyed by the GLB OBJECT name rather than the
+ *  material name: the billboards share the arena's catch-all `Trim` material
+ *  with ~75 other objects, so keying by material would wallpaper the whole map
+ *  with a diner ad. Blender cubes carry 0..1 UVs per face, so the image lands
+ *  once on each face — which is what a double-sided billboard wants anyway. */
+const BILLBOARD_BY_OBJECT: Record<string, string> = {
+  Board0: 'billboard-0.jpg',
+  Board1: 'billboard-1.jpg',
+  Kiosk: 'billboard-2.jpg',
+};
+const BILLBOARD_MAPS: Record<string, THREE.Texture> = {};
+
 async function loadWallMaps(): Promise<void> {
   const tl = new THREE.TextureLoader();
   const grab = (p: string) => new Promise<THREE.Texture | undefined>((res) =>
@@ -46,6 +58,65 @@ async function loadWallMaps(): Promise<void> {
     if (map) map.colorSpace = THREE.SRGBColorSpace;
     WALL_MAPS[key] = { map, normalMap, roughnessMap };
   }));
+}
+
+
+/**
+ * Fit a texture once across a flat panel, whatever angle it sits at.
+ *
+ * The billboards are boxes rotated 45 degrees onto the map's diagonal, and the
+ * UVs Blender exports for a cube are a cross-shaped unwrap — so sampling them
+ * directly shows one zoomed-in corner of the artwork rather than the poster.
+ * `boxProjectUVs` can't help either: at 45 degrees neither world axis dominates
+ * the normal, so it picks one arbitrarily and skews the image.
+ *
+ * Instead find the panel's own plane from the geometry: bucket every triangle's
+ * normal by area and take the heaviest direction as the face normal, then lay
+ * UVs out along the two in-plane axes and normalise to the panel's extent. The
+ * thin side faces get stretched, which is invisible on a 0.3m edge.
+ */
+function planarProjectUVs(geo: THREE.BufferGeometry): void {
+  const pos = geo.getAttribute('position') as THREE.BufferAttribute;
+  const idx = geo.getIndex();
+  const a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3();
+  const ab = new THREE.Vector3(), ac = new THREE.Vector3(), n = new THREE.Vector3();
+  const best = new THREE.Vector3();
+  let bestArea = -1;
+  const triCount = idx ? idx.count / 3 : pos.count / 3;
+  for (let t = 0; t < triCount; t++) {
+    const i0 = idx ? idx.getX(t * 3) : t * 3;
+    const i1 = idx ? idx.getX(t * 3 + 1) : t * 3 + 1;
+    const i2 = idx ? idx.getX(t * 3 + 2) : t * 3 + 2;
+    a.fromBufferAttribute(pos, i0);
+    b.fromBufferAttribute(pos, i1);
+    c.fromBufferAttribute(pos, i2);
+    ab.subVectors(b, a); ac.subVectors(c, a);
+    n.crossVectors(ab, ac);
+    const area = n.length();
+    if (area > bestArea) { bestArea = area; best.copy(n).normalize(); }
+  }
+  if (bestArea <= 0) return;
+  // in-plane axes: pick whichever world axis is least aligned with the normal
+  const up = Math.abs(best.y) > 0.9 ? new THREE.Vector3(1, 0, 0) : new THREE.Vector3(0, 1, 0);
+  const tangent = new THREE.Vector3().crossVectors(up, best).normalize();
+  const bitangent = new THREE.Vector3().crossVectors(best, tangent).normalize();
+
+  const us: number[] = [], vs: number[] = [];
+  let uMin = Infinity, uMax = -Infinity, vMin = Infinity, vMax = -Infinity;
+  for (let i = 0; i < pos.count; i++) {
+    a.fromBufferAttribute(pos, i);
+    const u = a.dot(tangent), v = a.dot(bitangent);
+    us.push(u); vs.push(v);
+    if (u < uMin) uMin = u; if (u > uMax) uMax = u;
+    if (v < vMin) vMin = v; if (v > vMax) vMax = v;
+  }
+  const du = uMax - uMin || 1, dv = vMax - vMin || 1;
+  const uv = new Float32Array(pos.count * 2);
+  for (let i = 0; i < pos.count; i++) {
+    uv[i * 2] = (us[i] - uMin) / du;
+    uv[i * 2 + 1] = (vs[i] - vMin) / dv;
+  }
+  geo.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
 }
 
 /**
@@ -97,6 +168,18 @@ function applyArenaPBR(root: THREE.Object3D): void {
   root.traverse((o) => {
     const mesh = o as THREE.Mesh;
     if (!mesh.isMesh) return;
+    const art = BILLBOARD_MAPS[mesh.name];
+    if (art) {
+      planarProjectUVs(mesh.geometry as THREE.BufferGeometry);
+      mesh.material = new THREE.MeshStandardMaterial({
+        map: art,
+        // knocked back from white: at full albedo the sunbaked preset's 3.5-unit
+        // sun blows the artwork out to a pale smear
+        color: new THREE.Color(0x8d8a85),
+        roughness: 0.92, metalness: 0.04, envMapIntensity: 0.5,
+      });
+      return;
+    }
     const src = mesh.material as THREE.MeshStandardMaterial;
     const rule = PBR_BY_MATERIAL[src?.name];
     if (!rule) return;
@@ -123,8 +206,18 @@ function applyArenaPBR(root: THREE.Object3D): void {
   });
 }
 
+async function loadBillboards(): Promise<void> {
+  const tl = new THREE.TextureLoader();
+  await Promise.all(Object.entries(BILLBOARD_BY_OBJECT).map(([obj, file]) =>
+    new Promise<void>((res) => tl.load(assetUrl(`textures/${file}`), (t) => {
+      t.colorSpace = THREE.SRGBColorSpace;
+      BILLBOARD_MAPS[obj] = t;
+      res();
+    }, undefined, () => res()))));
+}
+
 export async function loadSurfaceTextures(): Promise<void> {
-  await loadWallMaps();
+  await Promise.all([loadWallMaps(), loadBillboards()]);
   const load = (src: string) => new Promise<HTMLImageElement | undefined>((resolve) => {
     const img = new Image();
     img.onload = () => resolve(img);
