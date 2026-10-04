@@ -290,10 +290,11 @@ export class Game {
 
   private spawnVehicle(spec: CarSpec, pos: THREE.Vector3, yaw: number, name: string, isBot: boolean, color?: number): Vehicle {
     const v = new Vehicle(this.world, spec, pos, yaw, name, isBot);
-    const { group, wheels, wheelRadius } = buildCarMesh(spec, color);
+    const { group, wheels, wheelRadius, chassis } = buildCarMesh(spec, color);
     v.mesh = group;
     v.wheels = wheels;
     v.visualWheelRadius = wheelRadius;
+    v.chassis = chassis;
     // shield: hex-cell energy field hugging the car (mostly invisible —
     // the hex lattice reads on the rim, flares white when it eats a hit)
     const bubble = new THREE.Mesh(
@@ -1759,7 +1760,7 @@ export class Game {
     }
 
     for (const v of this.vehicles) {
-      v.syncVisual();
+      v.syncVisual(dt);
       // post-spawn invulnerability: blink the car so it reads as protected
       if (v.mesh && v.alive) {
         v.mesh.visible = v.spawnProtection > 0 ? Math.floor(this.time * 9) % 2 === 0 : true;

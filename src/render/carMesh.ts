@@ -97,10 +97,17 @@ export interface CarMeshResult {
   group: THREE.Group;
   wheels: THREE.Object3D[];
   wheelRadius: number;
+  /** body + bolted kit, minus the wheels — leaned for weight transfer */
+  chassis: THREE.Object3D;
 }
 
 function buildFromModel(spec: CarSpec, model: { body: THREE.Group; wheel: THREE.Object3D }): CarMeshResult {
   const group = new THREE.Group();
+  // Everything bolted to the body lives under `chassis` so vehicle.ts can lean
+  // and pitch it for weight transfer. The wheel pivots stay on `group` — a car
+  // that rolls its tyres with the body looks like a toy being tipped.
+  const chassis = new THREE.Group();
+  group.add(chassis);
   const { x: sx, y: sy, z: sz } = spec.size;
 
   const darkMat = new THREE.MeshStandardMaterial({ color: 0x17151d, roughness: 0.85 });
@@ -157,7 +164,7 @@ function buildFromModel(spec: CarSpec, model: { body: THREE.Group; wheel: THREE.
   body.position.x -= center.x;
   body.position.z -= center.z;
   body.position.y += (-sy - 0.18) - bbox.min.y;
-  group.add(body);
+  chassis.add(body);
   bbox = new THREE.Box3().setFromObject(body);
   const roofY = bbox.max.y;
   const hoodY = bbox.min.y + (bbox.max.y - bbox.min.y) * 0.62;
@@ -177,7 +184,7 @@ function buildFromModel(spec: CarSpec, model: { body: THREE.Group; wheel: THREE.
     mesh.position.set(x, y, z);
     mesh.rotation.set(rx, ry, rz);
     mesh.castShadow = true;
-    group.add(mesh);
+    chassis.add(mesh);
     return mesh;
   };
   const tube = (r: number, len: number, m: THREE.Material, x: number, y: number, z: number, alongZ = true, seg = 8) => {
@@ -185,7 +192,7 @@ function buildFromModel(spec: CarSpec, model: { body: THREE.Group; wheel: THREE.
     if (alongZ) mesh.rotation.x = Math.PI / 2;
     mesh.position.set(x, y, z);
     mesh.castShadow = true;
-    group.add(mesh);
+    chassis.add(mesh);
     return mesh;
   };
 
@@ -319,7 +326,7 @@ function buildFromModel(spec: CarSpec, model: { body: THREE.Group; wheel: THREE.
   const wheels: THREE.Object3D[] = [];
   // models with wheels already in the mesh get none — vehicle.ts loops over
   // this array, so an empty one simply skips the spin/steer visuals
-  if (WHEELS_BAKED_IN.has(spec.build)) return { group, wheels, wheelRadius: 0 };
+  if (WHEELS_BAKED_IN.has(spec.build)) return { group, wheels, wheelRadius: 0, chassis };
   // Size and place the wheel from the well the Blender cut actually left in
   // this body, not from a stock constant: the AI bodies carry monster-truck
   // arches, so a stock 0.32 wheel sits lost inside one.
@@ -366,7 +373,7 @@ function buildFromModel(spec: CarSpec, model: { body: THREE.Group; wheel: THREE.
     wheels.push(pivot);
   });
 
-  return { group, wheels, wheelRadius: targetR };
+  return { group, wheels, wheelRadius: targetR, chassis };
 }
 
 export function buildCarMesh(spec: CarSpec, colorOverride?: number): CarMeshResult {
@@ -374,6 +381,9 @@ export function buildCarMesh(spec: CarSpec, colorOverride?: number): CarMeshResu
   if (model) return buildFromModel(spec, model);
 
   const group = new THREE.Group();
+  // same split as the model path: body parts lean, wheels stay planted
+  const chassis = new THREE.Group();
+  group.add(chassis);
   const color = colorOverride ?? spec.color;
   const bodyMat = new THREE.MeshStandardMaterial({ color, roughness: 0.34, metalness: 0.5 });
   const bodyDark = new THREE.MeshStandardMaterial({
@@ -587,5 +597,5 @@ export function buildCarMesh(spec: CarSpec, colorOverride?: number): CarMeshResu
     wheels.push(pivot);
   }
 
-  return { group, wheels, wheelRadius: wheelR };
+  return { group, wheels, wheelRadius: wheelR, chassis };
 }

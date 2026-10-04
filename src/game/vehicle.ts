@@ -105,6 +105,11 @@ export class Vehicle {
    *  usually BIGGER than the physics WHEEL_RADIUS. syncVisual lifts the wheel
    *  by the difference; without that the tyre hangs below the road surface. */
   visualWheelRadius = WHEEL_RADIUS;
+  /** body + bolted kit, leaned independently of the wheels (see syncVisual) */
+  chassis: THREE.Object3D | null = null;
+  private leanRoll = 0;
+  private leanPitch = 0;
+  private lastVisualSpeed = 0;
   wheelCompression = [0, 0, 0, 0];
   wheelSteer = 0;
   wheelSpin = 0;
@@ -463,7 +468,7 @@ export class Vehicle {
     this.body.sleep();
   }
 
-  syncVisual() {
+  syncVisual(dt = 1 / 60) {
     if (!this.mesh) return;
     const t = this.body.translation();
     const r = this.body.rotation();
@@ -479,6 +484,25 @@ export class Vehicle {
       w.position.y = this.wheelAnchors[i].y - drop + (this.visualWheelRadius - WHEEL_RADIUS);
       w.rotation.set(0, i < 2 ? this.wheelSteer : 0, 0);
       w.children[0]?.rotation.set(this.wheelSpin % (Math.PI * 2), 0, 0);
+    }
+
+    // Visual weight transfer. The rigid body barely rolls — speed-scaled
+    // anti-roll is what stops turbo turns flipping the car — so the body is
+    // leaned on the mesh instead, which keeps the physics untouched. Roll comes
+    // from centripetal acceleration (yaw rate times speed) and pitch from
+    // longitudinal acceleration; both are eased hard because the raw per-step
+    // values are far too noisy to drive a visible rotation with.
+    if (this.chassis) {
+      const fwdSpd = this.forwardSpeed;
+      const lateral = THREE.MathUtils.clamp(this.body.angvel().y * fwdSpd, -60, 60);
+      const longitudinal = THREE.MathUtils.clamp(
+        (fwdSpd - this.lastVisualSpeed) / Math.max(dt, 1e-4), -30, 30);
+      this.lastVisualSpeed = fwdSpd;
+      const k = 1 - Math.exp(-7 * dt);
+      this.leanRoll += (lateral * 0.0022 - this.leanRoll) * k;
+      this.leanPitch += (longitudinal * 0.0016 - this.leanPitch) * k;
+      this.chassis.rotation.z = THREE.MathUtils.clamp(this.leanRoll, -0.11, 0.11);
+      this.chassis.rotation.x = THREE.MathUtils.clamp(this.leanPitch, -0.06, 0.06);
     }
   }
 }
