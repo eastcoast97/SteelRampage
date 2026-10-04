@@ -219,6 +219,93 @@ function stainTexture(): THREE.CanvasTexture {
   return tex;
 }
 
+
+/**
+ * Verge furniture: delineator posts marching along both edges of every street,
+ * plus occasional barrier clusters set back from the kerb.
+ *
+ * This is the strongest speed cue in the game. Random clutter streaks into mush
+ * under motion blur, but something REGULAR passing at a fixed interval is what
+ * the eye reads as velocity — so unlike the rest of the scatter these are
+ * placed by walking the street centrelines rather than by rejection sampling.
+ *
+ * No colliders, deliberately. A real delineator post is frangible, these sit on
+ * the verge rather than the carriageway, and giving several hundred of them
+ * colliders would both cost the solver and give the bots a new class of thing
+ * to get wedged against.
+ */
+function addVergeFurniture(
+  o: ScatterOpts, occ: { grid: Uint8Array; n: number }, rng: () => number,
+): THREE.Object3D[] {
+  const warm = o.palette === 'warm';
+  const posts: Placement[] = [];
+  const barriers: Placement[] = [];
+  const SPACING = 13;
+
+  for (const [x0, z0, x1, z1, w] of o.streets) {
+    const len = Math.hypot(x1 - x0, z1 - z0);
+    const ux = (x1 - x0) / len, uz = (z1 - z0) / len;
+    const nx = -uz, nz = ux;                       // street normal
+    const steps = Math.floor(len / SPACING);
+    for (let i = 1; i < steps; i++) {
+      const t = i * SPACING;
+      for (const side of [-1, 1]) {
+        const off = w / 2 + 1.4;
+        const x = x0 + ux * t + nx * side * off;
+        const z = z0 + uz * t + nz * side * off;
+        if (Math.abs(x) > o.half - 3 || Math.abs(z) > o.half - 3) continue;
+        const gi = Math.floor((x + o.half) / GRID_CELL);
+        const gj = Math.floor((z + o.half) / GRID_CELL);
+        if (gi < 0 || gj < 0 || gi >= occ.n || gj >= occ.n || occ.grid[gj * occ.n + gi]) continue;
+        // a post sitting in a junction mouth looks like it was dropped there
+        let onOther = false;
+        for (const [ax, az, bx, bz, aw] of o.streets) {
+          if (ax === x0 && az === z0 && bx === x1 && bz === z1) continue;
+          if (distToSegment(x, z, ax, az, bx, bz) < aw / 2 + 3) { onOther = true; break; }
+        }
+        if (onOther) continue;
+        if (o.keepClear.some((p) => Math.hypot(p.x - x, p.z - z) < 5)) continue;
+        (i % 5 === 0 ? barriers : posts).push({ x, z, edge: off });
+      }
+    }
+  }
+
+  const out: THREE.Object3D[] = [];
+  const postMat = new THREE.MeshStandardMaterial({
+    color: warm ? 0xd8d2c4 : 0xc8ccd2, roughness: 0.85,
+  });
+  const reflectorMat = new THREE.MeshStandardMaterial({
+    color: 0xff8a2a, emissive: 0xff6a10, emissiveIntensity: 0.9, roughness: 0.5,
+  });
+  const barrierMat = new THREE.MeshStandardMaterial({
+    color: warm ? 0xa89a84 : 0x7c828c, roughness: 0.95,
+  });
+
+  const postGeo = new THREE.CylinderGeometry(0.075, 0.095, 1.05, 6);
+  const m1 = instance(o.scene, postGeo, postMat, posts, (m) => {
+    m.position.y = 0.52;
+    m.rotation.y = rng() * 6.28;
+  });
+  if (m1) out.push(m1);
+  // the reflector band is what actually catches the eye going past
+  const bandGeo = new THREE.BoxGeometry(0.17, 0.16, 0.05);
+  const m2 = instance(o.scene, bandGeo, reflectorMat, posts, (m, p) => {
+    m.position.y = 0.88;
+    // face the carriageway: the post was offset along the street normal
+    m.lookAt(0, 0.88, 0);
+    void p;
+  });
+  if (m2) out.push(m2);
+
+  const m3 = instance(o.scene, new THREE.BoxGeometry(2.6, 0.85, 0.55), barrierMat, barriers, (m) => {
+    m.position.y = 0.42;
+    m.rotation.y = rng() * 6.28;
+  });
+  if (m3) out.push(m3);
+
+  return out;
+}
+
 export function addScatter(o: ScatterOpts): THREE.Object3D[] {
   const rng = mulberry32(o.seed);
   const occ = buildOccupancy(o.scene, o.half);
@@ -323,6 +410,8 @@ export function addScatter(o: ScatterOpts): THREE.Object3D[] {
     stainMesh.renderOrder = 1;      // sit on the road without z-fighting it
     added.push(stainMesh);
   }
+
+  added.push(...addVergeFurniture(o, occ, rng));
 
   return added;
 }
