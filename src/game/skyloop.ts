@@ -154,7 +154,13 @@ export function buildSkyLoop(o: SkyLoopOpts): SkyLoopResult {
   let arc = 0;
   for (let i = 0; i < n; i++) {
     const t = i / n;
-    const y = 12.5 + Math.sin(t * Math.PI * 4) * 4.2;
+    // THREE crests and dips, phase-shifted so the dips fall at t = 0.1, 0.43
+    // and 0.77 — on the north, east and west sides, avoiding the south edge
+    // where the old skyway lives. Entrances want a dip: a short climb joining
+    // flat track. Two dips forced the third ramp onto a 16m crest where it
+    // could never finish its merge, and four made the deck so wavy that cars
+    // launched off it. Three at this wavelength is a 4 degree gradient.
+    const y = 12.5 + Math.sin(t * Math.PI * 6 + Math.PI * 0.9) * 4.2;
     const prev = raw[(i - 1 + n) % n];
     const next = raw[(i + 1) % n];
     const fwd = new THREE.Vector3(next.x - prev.x, 0, next.z - prev.z).normalize();
@@ -189,17 +195,25 @@ export function buildSkyLoop(o: SkyLoopOpts): SkyLoopResult {
   // — needlessly hard to use. Search near the target fraction for the sample
   // whose whole run sits on straight track.
   const RAMP_RUN = 16;
+  // Score on curvature AND deck height. Straightness alone put one entrance on
+  // a 16.6m crest: the climb is twice as long and the merge lands where the
+  // deck is pitching over, which cost the lane. The dips are both a shorter
+  // climb and a flatter place to join.
   const straightest = (frac: number) => {
-    let best = Math.floor(n * frac), bestCurve = Infinity;
-    for (let d = -16; d <= 16; d++) {
+    let best = Math.floor(n * frac), bestScore = Infinity;
+    for (let d = -22; d <= 22; d++) {
       const i = (Math.floor(n * frac) + d + n) % n;
       let worst = 0;
       for (let k = 0; k <= RAMP_RUN; k++) worst = Math.max(worst, Math.abs(banked[(i - k + n * 2) % n]));
-      if (worst < bestCurve) { bestCurve = worst; best = i; }
+      const score = worst * 100 + samples[i].pos.y;
+      if (score < bestScore) { bestScore = score; best = i; }
     }
     return best;
   };
-  const ramps = [straightest(0.37), straightest(0.87)];
+  // Three entrances, one per usable side. One was genuinely hard to find, and
+  // the south edge is unavailable because the old skyway occupies it.
+  // the three dips of the height profile above
+  const ramps = [straightest(0.1), straightest(0.4333), straightest(0.7667)];
   // the rail has to stay open for the WHOLE merge lane, not just at its head,
   // or the ramp arrives alongside a barrier it cannot cross
   const inRamp = (i: number) => ramps.some((r) => {
@@ -284,6 +298,7 @@ function buildDeck(o: SkyLoopOpts, s: Sample[]) {
   const mesh = new THREE.Mesh(geo, o.deckMaterial);
   mesh.receiveShadow = true;
   o.scene.add(mesh);
+  o.scene.add(underside(geo, o.trimMaterial));
 
   // One trimesh for the whole deck, built from the exact vertices we just drew.
   // A chain of per-segment boxes was tried first and does not work: in a banked
@@ -415,15 +430,18 @@ function buildPylons(o: SkyLoopOpts, s: Sample[]) {
     const outward = right.dot(sm.pos) >= 0 ? 1 : -1;
     const foot = new THREE.Vector3().copy(sm.pos)
       .addScaledVector(right, outward * (DECK_HALF_W - 0.9));
-    // Stop short of the deck. A leg run all the way to the surface pokes up
-    // THROUGH it at the outer edge and becomes an invisible bollard on the
-    // racing line — it stopped a 37 m/s test run dead.
-    const h = Math.max(1, foot.y - DECK_THICK * 2 - 0.9);
+    // Stop just under the deck. A leg run all the way to the surface pokes up
+    // THROUGH it and becomes an invisible bollard on the racing line (it once
+    // stopped a 37 m/s run dead), but the 1.6m clearance that fixed that left
+    // the legs visibly dangling in mid-air under the viaduct. `foot` is already
+    // the surface point at this lateral offset, bank included, so a small
+    // margin is all that is needed.
+    const h = Math.max(1, foot.y - 0.3);
     o.world.createCollider(
-      RAPIER.ColliderDesc.cuboid(0.75, h / 2, 0.75).setTranslation(foot.x, h / 2, foot.z),
+      RAPIER.ColliderDesc.cuboid(0.55, h / 2, 0.55).setTranslation(foot.x, h / 2, foot.z),
       body,
     );
-    const g = new THREE.BoxGeometry(1.5, h, 1.5);
+    const g = new THREE.BoxGeometry(1.1, h, 1.1);
     g.translate(foot.x, h / 2, foot.z);
     geos.push(g);
   }
@@ -461,10 +479,16 @@ function buildOnRamp(o: SkyLoopOpts, s: Sample[], at: number) {
   const OFFSET = DECK_HALF_W + HALF_W - 1;
 
   const pos: number[] = [];
+  const uv: number[] = [];
   const idx: number[] = [];
   const right = new THREE.Vector3();
   const _flat = new THREE.Vector3();
   const smoothstep = (t: number) => t * t * (3 - 2 * t);
+  // Climb toward the height of the JOIN, not toward each sample's own deck
+  // height. The deck undulates, so using the local height made the lane hump
+  // 2.4m above its own join and come back down — an unnecessary crest right
+  // where the driver is trying to merge.
+  const joinY = s[at % n].pos.y;
 
   for (let k = 0; k <= RUN; k++) {
     // Stop a fraction short of the deck rather than landing exactly on it. At
@@ -487,28 +511,60 @@ function buildOnRamp(o: SkyLoopOpts, s: Sample[], at: number) {
     // a ceiling and jams about 8m short of the top. Instead: stay clear of the
     // deck laterally (OFFSET > DECK_HALF_W + HALF_W) while doing all the
     // climbing, then slide across only once already at deck height.
-    const hT = smoothstep(Math.min(1, t / 0.78));
-    const lT = smoothstep(Math.max(0, (t - 0.72) / 0.28));
+    // Climb over the first 62% and merge across the last 42%, overlapping in
+    // the middle. A 28% merge window is enough for the shallow entrances off the
+    // dips but not for the one that has to climb 16m — it arrives slower and
+    // runs out of lane before it is fully across.
+    const hT = smoothstep(Math.min(1, t / 0.62));
+    const lT = smoothstep(Math.max(0, (t - 0.58) / 0.42));
     const lateral = inward * OFFSET * (1 - lT);
-    const y = sm.pos.y * hT - 0.06 * lT;      // a hair low, never coincident
+    // Bury the foot slightly so the lane EMERGES from under the road rather
+    // than butting against it. Coplanar with the road leaves a seam to catch
+    // and z-fights; a bridge touching down should just appear out of the
+    // tarmac. The bias fades out as the lane climbs.
+    const y = joinY * hT - 0.06 * lT - 0.3 * (1 - hT);
     const centre = new THREE.Vector3(sm.pos.x, y, sm.pos.z).addScaledVector(rightFlat, lateral);
     // level where it leaves the road, banked to match where it joins the deck
     const across = rightFlat.clone().lerp(right, lT).normalize();
     const l = centre.clone().addScaledVector(across, -HALF_W);
     const r = centre.clone().addScaledVector(across, HALF_W);
-    pos.push(l.x, l.y, l.z, r.x, r.y, r.z);
+    // Each cross-section is four points: the two road edges and the two ground
+    // points below them. The skirts between them close the embankment.
+    // Without them the lane is a one-sided ribbon whose edge a car can get its
+    // wheels under — two bots per soak wedged against exactly that, 1.8m and
+    // 4.4m from a ramp lane, and the bots' avoidance whiskers have nothing
+    // solid to read either.
+    pos.push(l.x, l.y, l.z, r.x, r.y, r.z, l.x, 0, l.z, r.x, 0, r.z);
+    // Without UVs every triangle samples one texel and the whole ramp renders
+    // as a flat dark slab instead of tarmac. v runs along the lane at the same
+    // metres-per-tile as the deck so the two read as the same road.
+    const v = (k * 5.5) / 14;
+    uv.push(0, v, 1, v, 0, v, 1, v);
   }
+  const STRIDE = 4;
   for (let k = 0; k < RUN; k++) {
-    const a = k * 2, b = a + 1, c = a + 2, d = a + 3;
-    idx.push(a, c, b, b, c, d);
+    const a = k * STRIDE, b = a + 1, la = a + 2, ra = a + 3;
+    const c = a + STRIDE, d = c + 1, lc = c + 2, rc = c + 3;
+    idx.push(a, c, b, b, c, d);              // road surface
+    // Skirt only the raised part. Walling the section where the lane emerges
+    // from the tarmac turns the entrance itself into a kerb and the car can no
+    // longer get on at all — the whole point of the buried lead-in is that it
+    // is a thin wedge you drive straight over.
+    if (pos[a * 3 + 1] > 0.5 && pos[c * 3 + 1] > 0.5) {
+      idx.push(la, a, lc, lc, a, c);         // left skirt
+      idx.push(b, ra, d, d, ra, rc);         // right skirt
+    }
   }
 
   // record the centre of the first and last cross-sections
   SKYLOOP_NODES.rampFeet.push(new THREE.Vector3(
     (pos[0] + pos[3]) / 2, (pos[1] + pos[4]) / 2, (pos[2] + pos[5]) / 2));
-  const L = pos.length;
+  // Each cross-section is 4 points (road l/r then ground l/r) = 12 floats, so
+  // the last section's ROAD points start 12 back, not 6. Reading 6 back gets
+  // the ground points and reports the ramp top at y = 0.
+  const L = pos.length - 12;
   SKYLOOP_NODES.rampTops.push(new THREE.Vector3(
-    (pos[L - 6] + pos[L - 3]) / 2, (pos[L - 5] + pos[L - 2]) / 2, (pos[L - 4] + pos[L - 1]) / 2));
+    (pos[L] + pos[L + 3]) / 2, (pos[L + 1] + pos[L + 4]) / 2, (pos[L + 2] + pos[L + 5]) / 2));
 
   const body = o.world.createRigidBody(RAPIER.RigidBodyDesc.fixed());
   o.world.createCollider(
@@ -517,11 +573,32 @@ function buildOnRamp(o: SkyLoopOpts, s: Sample[], at: number) {
   );
   const geo = new THREE.BufferGeometry();
   geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  geo.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
   geo.setIndex(idx);
   geo.computeVertexNormals();
   const mesh = new THREE.Mesh(geo, o.deckMaterial);
   mesh.receiveShadow = true;
+  mesh.castShadow = true;
   o.scene.add(mesh);
+  // No soffit here. The ramp's skirts already carry it down to the ground, so a
+  // floating copy 0.42m below just leaves an open gap you can see straight
+  // through — it reads as the ramp being semi-transparent.
+}
+
+/**
+ * A soffit for an elevated surface.
+ *
+ * The deck is a one-sided ribbon drawn with DoubleSide, so from underneath you
+ * were looking at tarmac and lane markings on the bottom of the viaduct. This
+ * clones the ribbon, drops it, and flips it to face down with the concrete trim
+ * material — which also gives the deck apparent thickness from a low angle.
+ */
+function underside(geo: THREE.BufferGeometry, mat: THREE.Material): THREE.Mesh {
+  const g = geo.clone();
+  g.translate(0, -0.42, 0);
+  const m = new THREE.Mesh(g, mat);
+  m.castShadow = true;
+  return m;
 }
 
 /** merge a list of geometries without pulling in BufferGeometryUtils */
