@@ -263,6 +263,16 @@ export class Effects {
         drag: 2, spin: (Math.random() - 0.5) * 4 });
   }
 
+  /** engine fire licking out of a wrecked car — `severity` 0..1, rate per second */
+  engineFire(pos: THREE.Vector3, severity: number, dt: number) {
+    if (Math.random() > (18 + severity * 30) * dt) return;
+    this.emit(pos, randomDir().multiplyScalar(0.8).setY(1.6 + Math.random() * 1.6),
+      { life: 0.26 + Math.random() * 0.2,
+        sizeFrom: 0.32 + severity * 0.3, sizeTo: 0.7 + severity * 0.6,
+        from: 0xffe6a0, to: 0xc83a08, cell: CELL_FIRE_0, cells: CELL_FIRE_N,
+        gravity: -3.2, drag: 1.8, spin: (Math.random() - 0.5) * 3 });
+  }
+
   /** muzzle flash at a gun barrel, pointing down the shot */
   muzzleFlash(pos: THREE.Vector3, dir: THREE.Vector3) {
     this.emit(pos, dir.clone().multiplyScalar(2),

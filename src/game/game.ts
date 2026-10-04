@@ -1730,6 +1730,30 @@ export class Game {
         boosting ? me.position.clone().addScaledVector(me.forward, -(me.spec.size.z + 0.6)).setY(me.position.y + 0.25) : null,
         0x7fd4ff, 55, 13);
     }
+    // Damage states: a hurt car trails smoke, a nearly-dead one burns. This is
+    // readability as much as juice — at a glance you can see who is worth
+    // chasing, which the HP sprites only tell you once you have a lock.
+    for (const v of this.vehicles) {
+      if (!v.alive || v.spawnProtection > 0) continue;
+      const frac = v.health / v.spec.maxHealth;
+      if (frac > 0.55) continue;
+      const hurt = 1 - frac / 0.55;                       // 0 at 55%, 1 at death
+      const vent = _v1.copy(v.position)
+        .addScaledVector(v.forward, -v.spec.size.z * 0.35)
+        .setY(v.position.y + v.spec.size.y * 0.7);
+      // rates are per second: render runs at the display's refresh rate, so a
+      // per-frame chance would pour twice the smoke on a 120Hz screen
+      if (Math.random() < (13 + hurt * 33) * dt) this.effects.smokeTrail(vent);
+      if (frac < 0.25) {
+        this.effects.engineFire(vent, (0.25 - frac) / 0.25, dt);
+        if (v === this.player) {
+          this.effects.glow('selfFire', vent.clone(), 0xff7a22, 26, 9);
+        }
+      } else if (v === this.player) {
+        this.effects.glow('selfFire', null, 0xff7a22, 0, 9);
+      }
+    }
+
     for (const v of this.vehicles) {
       v.syncVisual();
       // post-spawn invulnerability: blink the car so it reads as protected
