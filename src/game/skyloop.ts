@@ -143,6 +143,40 @@ function smooth(values: number[], passes: number): number[] {
   return v;
 }
 
+
+const RAMP_RUN_SAMPLES = 16;
+const RAMP_HALF_W = 5.5;
+/** must exceed DECK_HALF_W + RAMP_HALF_W so the climb stays clear of the deck */
+const RAMP_OFFSET = DECK_HALF_W + RAMP_HALF_W - 1;
+
+/**
+ * Where the merge lane's centre is at step k of its run, and how high.
+ *
+ * Shared by the builder and the placement scorer. They MUST agree: the scorer
+ * used to approximate the lane as a constant 12.5m inboard, but the lane sweeps
+ * all the way onto the deck centreline as it merges — which is exactly where
+ * the spawn points are — so a ramp could be scored as clear and then built with
+ * its merge 5m from a spawn.
+ */
+function laneAt(s: Sample[], at: number, k: number): { x: number; z: number; y: number } {
+  const n = s.length;
+  const smoothstep = (t: number) => t * t * (3 - 2 * t);
+  const t = k / (RAMP_RUN_SAMPLES + 1);
+  const sm = s[(at - RAMP_RUN_SAMPLES + k + n * 2) % n];
+  const hT = smoothstep(Math.min(1, t / 0.62));
+  const lT = smoothstep(Math.max(0, (t - 0.58) / 0.42));
+  const rx = -sm.fwd.z, rz = sm.fwd.x;
+  const len = Math.hypot(rx, rz) || 1;
+  const inward = (rx / len) * sm.pos.x + (rz / len) * sm.pos.z >= 0 ? -1 : 1;
+  const lateral = inward * RAMP_OFFSET * (1 - lT);
+  const joinY = s[at % n].pos.y;
+  return {
+    x: sm.pos.x + (rx / len) * lateral,
+    z: sm.pos.z + (rz / len) * lateral,
+    y: joinY * hT - 0.06 * lT - 0.3 * (1 - hT),
+  };
+}
+
 export function buildSkyLoop(o: SkyLoopOpts): SkyLoopResult {
   const { world, scene } = o;
   const extent = o.half - 22;                 // sits over the perimeter road
@@ -197,7 +231,7 @@ export function buildSkyLoop(o: SkyLoopOpts): SkyLoopResult {
   // curve, so the driver has to follow an arc that never points at the entrance
   // — needlessly hard to use. Search near the target fraction for the sample
   // whose whole run sits on straight track.
-  const RAMP_RUN = 16;
+  const RAMP_RUN = RAMP_RUN_SAMPLES;
   // Score on curvature AND deck height. Straightness alone put one entrance on
   // a 16.6m crest: the climb is twice as long and the merge lands where the
   // deck is pitching over, which cost the lane. The dips are both a shorter
@@ -227,18 +261,17 @@ export function buildSkyLoop(o: SkyLoopOpts): SkyLoopResult {
       for (let k = 0; k <= RAMP_RUN; k++) {
         const sm = samples[(i - k + n * 2) % n];
         worst = Math.max(worst, Math.abs(banked[(i - k + n * 2) % n]));
-        // the lane sits up to OFFSET inboard; sample across that whole band
+        // Spawn clearance against the ACTUAL lane, along its WHOLE length.
+        // Gating this on lane height was wrong: the skirts carry the embankment
+        // from the ground up to the lane, so even where the lane is already at
+        // deck height it is still a solid wall at street level. That left a 9m
+        // wall 2.6m from a spawn — you started the match staring at it.
+        const lane = laneAt(samples, i, RAMP_RUN_SAMPLES - k);
+        for (const a of o.avoid) {
+          if (Math.hypot(a.x - lane.x, a.z - lane.z) < 16) nearSpawn = 1;
+        }
         _r.set(-sm.fwd.z, 0, sm.fwd.x).normalize();
         const inward = _r.dot(sm.pos) >= 0 ? -1 : 1;
-        // Measure spawn clearance from the LANE, not the deck centreline. The
-        // lane is ~13m inboard, so a 22m radius around the centreline rules out
-        // nearly every straight stretch — on a 208m edge with two spawns, no
-        // 93m run survived and the scorer fell back to cornering.
-        const lx = sm.pos.x + _r.x * inward * 12.5;
-        const lz = sm.pos.z + _r.z * inward * 12.5;
-        for (const a of o.avoid) {
-          if (Math.hypot(a.x - lx, a.z - lz) < 13) nearSpawn = 1;
-        }
         for (const off of [4, 9, 13]) {
           if (blocked(sm.pos.x + _r.x * inward * off, sm.pos.z + _r.z * inward * off)) obstructed++;
         }
@@ -315,6 +348,7 @@ function buildDeck(o: SkyLoopOpts, s: Sample[]) {
   const pos: number[] = [];
   const uv: number[] = [];
   const idx: number[] = [];
+  const outside: boolean[] = [];
   const m = new THREE.Matrix4();
   const q = new THREE.Quaternion();
   const right = new THREE.Vector3();
@@ -512,18 +546,20 @@ function buildPylons(o: SkyLoopOpts, s: Sample[]) {
  */
 function buildOnRamp(o: SkyLoopOpts, s: Sample[], at: number) {
   const n = s.length;
-  const RUN = 16;                 // must match RAMP_RUN in buildSkyLoop
-  const HALF_W = 5.5;
+  // shared with the placement scorer via laneAt() so the two cannot drift
+  const RUN = RAMP_RUN_SAMPLES;
+  const HALF_W = RAMP_HALF_W;
   // The lane's outer edge must MEET the deck's inner edge. Too small and the
   // lane runs underneath the deck and traps the car; too large (16 was tried)
   // and a gap opens between them that the car drops straight into while
   // merging. Sitting them 1m overlapped is the only arrangement that is
   // continuous the whole way across.
-  const OFFSET = DECK_HALF_W + HALF_W - 1;
+  const OFFSET = RAMP_OFFSET;
 
   const pos: number[] = [];
   const uv: number[] = [];
   const idx: number[] = [];
+  const outside: boolean[] = [];
   const right = new THREE.Vector3();
   const _flat = new THREE.Vector3();
   const smoothstep = (t: number) => t * t * (3 - 2 * t);
@@ -561,6 +597,10 @@ function buildOnRamp(o: SkyLoopOpts, s: Sample[], at: number) {
     const hT = smoothstep(Math.min(1, t / 0.62));
     const lT = smoothstep(Math.max(0, (t - 0.58) / 0.42));
     const lateral = inward * OFFSET * (1 - lT);
+    // Once the lane has slid inside the deck's footprint the deck carries it;
+    // continuing the embankment there leaves a wall dropping away in the middle
+    // of the deck's width, which is what makes the merge look mismatched.
+    outside.push(Math.abs(lateral) > DECK_HALF_W);
     // Bury the foot slightly so the lane EMERGES from under the road rather
     // than butting against it. Coplanar with the road leaves a seam to catch
     // and z-fights; a bridge touching down should just appear out of the
@@ -593,7 +633,7 @@ function buildOnRamp(o: SkyLoopOpts, s: Sample[], at: number) {
     // from the tarmac turns the entrance itself into a kerb and the car can no
     // longer get on at all — the whole point of the buried lead-in is that it
     // is a thin wedge you drive straight over.
-    if (pos[a * 3 + 1] > 0.5 && pos[c * 3 + 1] > 0.5) {
+    if (pos[a * 3 + 1] > 0.5 && pos[c * 3 + 1] > 0.5 && outside[k] && outside[k + 1]) {
       idx.push(la, a, lc, lc, a, c);         // left skirt
       idx.push(b, ra, d, d, ra, rc);         // right skirt
     }
@@ -639,7 +679,13 @@ function buildOnRamp(o: SkyLoopOpts, s: Sample[], at: number) {
 function underside(geo: THREE.BufferGeometry, mat: THREE.Material): THREE.Mesh {
   const g = geo.clone();
   g.translate(0, -0.42, 0);
-  const m = new THREE.Mesh(g, mat);
+  // BackSide is the whole point. The clone keeps the deck's upward-facing
+  // winding, so with the trim material's default FrontSide every triangle is
+  // back-face culled when you look up at it — the soffit renders as nothing and
+  // you see the deck's own DoubleSide underside, which is tarmac and lane
+  // markings on the bottom of the viaduct.
+  const m = new THREE.Mesh(g, (mat as THREE.Material).clone());
+  (m.material as THREE.Material).side = THREE.BackSide;
   m.castShadow = true;
   return m;
 }
