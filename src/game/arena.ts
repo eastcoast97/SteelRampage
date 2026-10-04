@@ -924,7 +924,8 @@ function makeSignTexture(lines: string[], bg: string, fg: string): THREE.CanvasT
  *  pickups and boost pads can be appended to whatever the arena already has. */
 function addSkyLoop(
   world: RAPIER.World, scene: THREE.Scene, half: number, skyIdx: number,
-  data: { pickupPoints: ArenaData['pickupPoints']; boostPads: ArenaData['boostPads'] },
+  data: { pickupPoints: ArenaData['pickupPoints']; boostPads: ArenaData['boostPads'];
+          spawnPoints: ArenaData['spawnPoints'] },
 ): void {
   const wet = skyIdx >= 2;
   const deckMaps = makeRoadMaps('highway');
@@ -932,6 +933,7 @@ function addSkyLoop(
   deckMaps.rough.repeat.set(1, 1);
   const res = buildSkyLoop({
     world, scene, half,
+    avoid: data.spawnPoints.map((sp) => sp.pos),
     deckMaterial: new THREE.MeshStandardMaterial({
       map: deckMaps.map, roughnessMap: deckMaps.rough,
       roughness: wet ? 0.5 : 1, metalness: wet ? 0.4 : 0.08,
@@ -1626,7 +1628,7 @@ export function buildArena(world: RAPIER.World, scene: THREE.Scene, forcedSkyIdx
     { x: -41, z: 41, hx: 4, hz: 4 },
   ];
 
-  addSkyLoop(world, scene, H, skyIdx, { pickupPoints, boostPads });
+  addSkyLoop(world, scene, H, skyIdx, { pickupPoints, boostPads, spawnPoints });
   scatterClutter(scene, H, arenaIdx, { spawnPoints, pickupPoints, barrelPoints, boostPads });
 
   return { spawnPoints, pickupPoints, barrelPoints, pedZones, boostPads, pumpPoints: [], skyIdx, envColors: { top: sky.top, hor: sky.hor } };

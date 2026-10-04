@@ -53,7 +53,7 @@ interface Placement {
   edge: number;
 }
 
-const GRID_CELL = 2;
+export const GRID_CELL = 2;
 
 /**
  * Mark every grid cell covered by something standing on the ground.
@@ -63,7 +63,7 @@ const GRID_CELL = 2;
  * marking those would occupy the entire map. Long thin boxes are walls and do
  * count, so the test is on the SMALLER of the two extents.
  */
-function buildOccupancy(scene: THREE.Scene, half: number): { grid: Uint8Array; n: number } {
+export function buildOccupancy(scene: THREE.Scene, half: number): { grid: Uint8Array; n: number } {
   const n = Math.ceil((half * 2) / GRID_CELL);
   const grid = new Uint8Array(n * n);
   const box = new THREE.Box3();

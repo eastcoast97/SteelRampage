@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import RAPIER from '@dimforge/rapier3d-compat';
 import type { PickupType } from './pickups';
+import { buildOccupancy, GRID_CELL } from './scatter';
 
 /**
  * THE SKYLOOP — a continuous elevated circuit around the whole arena.
@@ -37,6 +38,8 @@ export interface SkyLoopOpts {
   trimMaterial: THREE.Material;
   /** emissive accent for rail tops and kicker lips */
   neonMaterial: THREE.Material;
+  /** spawn points — ramps must not be built on top of these */
+  avoid: THREE.Vector3[];
 }
 
 export interface SkyLoopResult {
@@ -199,13 +202,53 @@ export function buildSkyLoop(o: SkyLoopOpts): SkyLoopResult {
   // a 16.6m crest: the climb is twice as long and the merge lands where the
   // deck is pitching over, which cost the lane. The dips are both a shorter
   // climb and a flatter place to join.
+  // Ramps descend to street level, so they have to miss everything already
+  // standing there — buildings, the old skyway, bunkers. Rather than hand-pick
+  // coordinates (which broke every time the placement moved), reuse the same
+  // occupancy grid the ground scatter uses. It is built from the scene's own
+  // mesh bounds, so it knows about whatever this arena actually contains.
+  const occ = buildOccupancy(o.scene, o.half);
+  const blocked = (x: number, z: number) => {
+    const i = Math.floor((x + o.half) / GRID_CELL);
+    const j = Math.floor((z + o.half) / GRID_CELL);
+    return i < 0 || j < 0 || i >= occ.n || j >= occ.n || occ.grid[j * occ.n + i] === 1;
+  };
+  const _r = new THREE.Vector3();
   const straightest = (frac: number) => {
     let best = Math.floor(n * frac), bestScore = Infinity;
-    for (let d = -22; d <= 22; d++) {
+    for (let d = -30; d <= 30; d++) {
       const i = (Math.floor(n * frac) + d + n) % n;
       let worst = 0;
-      for (let k = 0; k <= RAMP_RUN; k++) worst = Math.max(worst, Math.abs(banked[(i - k + n * 2) % n]));
-      const score = worst * 100 + samples[i].pos.y;
+      // A ramp embankment built over a spawn point puts the player inside a
+      // wall at match start: the camera's occlusion ray hits it immediately and
+      // pulls in to 1.4m, so you see a sliver of your own car and nothing else.
+      let nearSpawn = 0;
+      let obstructed = 0;
+      for (let k = 0; k <= RAMP_RUN; k++) {
+        const sm = samples[(i - k + n * 2) % n];
+        worst = Math.max(worst, Math.abs(banked[(i - k + n * 2) % n]));
+        // the lane sits up to OFFSET inboard; sample across that whole band
+        _r.set(-sm.fwd.z, 0, sm.fwd.x).normalize();
+        const inward = _r.dot(sm.pos) >= 0 ? -1 : 1;
+        // Measure spawn clearance from the LANE, not the deck centreline. The
+        // lane is ~13m inboard, so a 22m radius around the centreline rules out
+        // nearly every straight stretch — on a 208m edge with two spawns, no
+        // 93m run survived and the scorer fell back to cornering.
+        const lx = sm.pos.x + _r.x * inward * 12.5;
+        const lz = sm.pos.z + _r.z * inward * 12.5;
+        for (const a of o.avoid) {
+          if (Math.hypot(a.x - lx, a.z - lz) < 13) nearSpawn = 1;
+        }
+        for (const off of [4, 9, 13]) {
+          if (blocked(sm.pos.x + _r.x * inward * off, sm.pos.z + _r.z * inward * off)) obstructed++;
+        }
+      }
+      // Straightness and spawn clearance are HARD constraints, not weights.
+      // As a weighted term, curvature (max ~0.42, so ~42 points) lost to the
+      // obstruction count (up to 2040) and the scorer happily put an entrance
+      // around a corner, where the climb curves and no one can follow it.
+      const curved = worst > 0.05 ? 1 : 0;
+      const score = curved * 10000 + nearSpawn * 10000 + obstructed * 40 + samples[i].pos.y;
       if (score < bestScore) { bestScore = score; best = i; }
     }
     return best;

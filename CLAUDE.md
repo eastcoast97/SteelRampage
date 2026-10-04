@@ -120,6 +120,12 @@ Phase 3.7b (fix): skyloop presentation + a third entrance (user: hanging pillars
 - Feet sit at y = −0.3 so the lane EMERGES from the tarmac instead of butting against it.
 GOTCHA: cross-sections are now 4 points = 12 floats, so SKYLOOP_NODES' "last road points" offset is `length − 12`, not `− 6`; reading −6 gets the ground points and reports the ramp top at y=0, which silently makes any height-based test pass.
 Verified: all 3 entrances drivable (deck reached at frames 98/98/113), bot soak 944–1966m with kills, no errors.
+Phase 3.7c (fix): **match start showed a sliver of car and nothing else** (user). A ramp embankment had been built across spawn 0 at (138,60), so the camera's occlusion ray hit it instantly and clamped to `Math.max(0.5, toi − 0.4)` ≈ 1.4m. ALL eight town spawns sit on the perimeter road, which is exactly where the loop runs — so ramp placement must treat them as keep-out.
+Ramp placement is now scored with HARD constraints, after three wrong balances:
+  * straightness and spawn clearance are binary ×10000 penalties, not weights. As a weighted term curvature (max ~0.42 → 42 points) lost to the obstruction count (up to 2040) and the scorer cheerfully put an entrance around a corner.
+  * obstruction uses `buildOccupancy()` exported from scatter.ts — the same grid the ground clutter uses, built from the scene's own mesh bounds, so ramps miss buildings/skyway/bunkers without hand-picked coordinates (which broke every time placement moved).
+  * spawn clearance is measured from the LANE (≈12.5m inboard), radius 13 — NOT from the deck centreline at radius 22. The generous version ruled out nearly every straight stretch (a 208m edge with two spawns leaves no clean 93m run) and forced the fallback to corners.
+Verified: all 8 town spawns + all 8 docks spawns at camera distance 8.3–8.6m with the car on the road (was 1.42m on spawn 0); all 3 entrances drivable (frames 117/100/118); docks soak 644–1291m, no errors.
 TEST GOTCHA: a path-follow controller must steer toward a point AHEAD (`pos + fwd*d`); aiming at `pos − fwd*d` silently drives into the outer rail and looks exactly like a track defect. Two "wedges" chased in this phase were that sign error, not geometry.
 
 Ideas: gamepad support, energy attacks (freeze), split-screen, dedicated server-sim (extract game.step from THREE/DOM), interpolation-delay auto-tuning from jitter.
