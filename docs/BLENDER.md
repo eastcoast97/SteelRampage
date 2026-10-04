@@ -142,3 +142,42 @@ emissive for lit windows — exports natively, no baking.
   + `hero-wheel.glb`, wired to the **muscle** archetype (HELLCAT). Verified in-game.
 - Remaining 7 archetypes still use the Kenney kit — same script can be
   re-proportioned per archetype (wedge/truck/hearse) to replace them.
+
+## Editing the arenas again (round-trip workflow)
+
+The parametric generators that produced `arena.glb` and `arena-docks.glb` lived
+in `/tmp/bl/` and were lost to macOS temp cleanup, which left both arenas frozen:
+the committed GLBs worked but nothing in them could be changed. **Editing is
+restored by round-tripping the GLB itself** rather than reconstructing the
+generators — `tools/blender/arena_io.py` imports an arena, audits it, and exports
+it back.
+
+```python
+exec(open('tools/blender/arena_io.py').read())
+load(TOWN)        # or DOCKS
+audit()           # marker counts + anything the game loader would drop
+# ...move, add, delete objects...
+save(TOWN)        # audits first; refuses to write if the audit fails
+```
+
+Verified lossless on both arenas: 320 objects in and out for the town, 265 for
+the docks, every gameplay marker preserved at an identical game-space position,
+and a 90s bot soak on the re-exported town ran 807–1851m with kills flowing and
+no errors. An edit test moved `SPAWN_0` from game (138, 1.2, 60) to (163, 1.2, 60)
+and added a new prop; the game picked up both.
+
+Things that make this fragile, all handled by `arena_io.py`:
+
+- **Markers are Empties.** 41 of the town's 320 objects carry no geometry at all
+  (`SPAWN_`, `PICKUP_<type>_`, `BARREL_`, `PUMP_`). Exporting with
+  `use_selection=True` silently drops them, and nothing looks wrong until a match
+  starts with no spawn points — so `save()` always exports the whole scene.
+- **Blender's `.001` suffixes.** Duplicating an object gives `SPAWN_3.001`, which
+  no longer matches the game's prefix parsing. `audit()` fails on these.
+- **Pickup types are a closed set.** `PICKUP_<type>_<n>` must use a name from
+  `PICKUP_TYPE_ORDER` in `src/game/pickups.ts`; a typo makes the socket vanish.
+- **`BOOST_` and `PED_` must stay meshes** — the game reads their extents to get
+  the pad rectangle, so replacing one with an Empty loses the size.
+
+`audit()` reports positions in GAME coordinates (Blender `(x, y, z)` → game
+`(x, z, −y)`) so they can be compared against `src/game/arena.ts` directly.
