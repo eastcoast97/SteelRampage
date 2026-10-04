@@ -215,6 +215,10 @@ export class Game {
   private wallHitCooldowns = new Map<Vehicle, number>();
   private missileAlarmT = 0;
   private turboLerp = 0;
+  /** eased weight-transfer state for the chase camera */
+  private surge = 0;
+  private camLean = 0;
+  private lastFwdSpeed = 0;
   // skid marks: fixed pool, oldest recycled
   private skids: THREE.Mesh[] = [];
   private skidCursor = 0;
@@ -1933,9 +1937,29 @@ export class Game {
     const turboNow = p.alive && p.input.turbo && p.turboMeter > 0 && p.input.throttle > 0;
     this.turboLerp += ((turboNow ? 1 : 0) - this.turboLerp) * (1 - Math.exp(-5 * dt));
     const speedN = THREE.MathUtils.clamp(p.speed / 36, 0, 1);
-    const dist = 7.8 + speedN * 1.6 + this.turboLerp * 1.7;
-    const height = 3.4 + speedN * 0.4 + this.turboLerp * 0.3;
+
+    // Weight transfer. A rigid chase rig reads as a camera bolted to a model;
+    // what sells a car having mass is the rig lagging the car's acceleration —
+    // the camera falls back and drops under power, rises and closes under
+    // braking, and leans out of a corner. All three are eased hard because the
+    // raw per-step deltas are far too noisy to drive a camera with.
+    const accel = (p.forwardSpeed - this.lastFwdSpeed) / Math.max(dt, 1e-4);
+    this.lastFwdSpeed = p.forwardSpeed;
+    this.surge += (THREE.MathUtils.clamp(accel / 26, -1, 1) - this.surge) * (1 - Math.exp(-4.5 * dt));
+    // lateral lean from the car's own yaw rate, scaled by how fast it is going
+    const av = p.body.angvel();
+    const lean = THREE.MathUtils.clamp(av.y, -2.2, 2.2) * speedN;
+    this.camLean += (lean - this.camLean) * (1 - Math.exp(-5 * dt));
+
+    const dist = 7.8 + speedN * 1.6 + this.turboLerp * 1.7 + this.surge * 1.5;
+    // drop toward the road as speed builds — low and close is most of why a
+    // fast car feels fast
+    const height = 3.4 + speedN * 0.4 + this.turboLerp * 0.3
+      - speedN * 0.9 - this.surge * 0.45;
     _v1.copy(pos).addScaledVector(fwd, -dist).setY(pos.y + height);
+    // swing the rig to the outside of the turn
+    _v3.set(fwd.z, 0, -fwd.x);
+    _v1.addScaledVector(_v3, this.camLean * 0.85);
 
     if (!this.camInit) {
       this.camPos.copy(_v1);
@@ -1972,8 +1996,12 @@ export class Game {
       this.camera.position.z += (Math.random() - 0.5) * tr * 0.9;
     }
 
+    // look into the corner rather than straight down the nose
     _v2.copy(pos).addScaledVector(fwd, 6.5).setY(pos.y + 1.0);
+    _v3.set(fwd.z, 0, -fwd.x);
+    _v2.addScaledVector(_v3, -this.camLean * 1.6);
     this.camera.lookAt(_v2);
+    this.camera.up.set(Math.sin(this.camLean * 0.06), Math.cos(this.camLean * 0.06), 0);
 
     // dynamic FOV: blooms quadratically with speed (strongest speed cue),
     // turbo adds a full +15° on top

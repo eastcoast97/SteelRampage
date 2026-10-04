@@ -163,15 +163,77 @@ async function boot() {
     `,
   });
 
+  /**
+   * Velocity-driven speed presentation — the Most Wanted signature.
+   *
+   * Three effects share one pass because they all key off the same scalar and
+   * all want to sample the same source texture: a radial blur streaking out
+   * from the focus point, chromatic aberration that splits harder toward the
+   * edges, and a vignette that closes in. At a standstill `speed` is 0 and the
+   * shader early-outs to a single tap, so it costs nothing when parked.
+   *
+   * The blur centres on `focus` rather than the screen centre: streaking away
+   * from the vanishing point you are steering toward reads as travel, while
+   * streaking from dead centre reads as a zoom.
+   */
+  const speedPass = new ShaderPass({
+    uniforms: {
+      tDiffuse: { value: null },
+      speed: { value: 0 },          // 0..1, set per frame from the player's velocity
+      focus: { value: new THREE.Vector2(0.5, 0.5) },
+      blurStrength: { value: 0.42 },
+      aberration: { value: 0.0055 },
+      vignette: { value: 0.75 },
+    },
+    vertexShader: `
+      varying vec2 vUv;
+      void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }
+    `,
+    fragmentShader: `
+      uniform sampler2D tDiffuse;
+      uniform float speed, blurStrength, aberration, vignette;
+      uniform vec2 focus;
+      varying vec2 vUv;
+
+      void main() {
+        if (speed <= 0.001) { gl_FragColor = texture2D(tDiffuse, vUv); return; }
+
+        vec2 dir = vUv - focus;
+        float edge = clamp(length(dir) * 1.6, 0.0, 1.0);
+        // hold the middle of the screen sharp; the car must stay readable
+        float amount = speed * blurStrength * edge * edge;
+
+        vec3 sum = vec3(0.0);
+        const int TAPS = 8;
+        for (int i = 0; i < TAPS; i++) {
+          float t = float(i) / float(TAPS - 1);
+          // sample back along the radius, and split the channels while we are
+          // at it so the aberration costs no extra taps
+          vec2 off = dir * amount * t;
+          float ca = aberration * speed * edge;
+          sum.r += texture2D(tDiffuse, vUv - off + dir * ca).r;
+          sum.g += texture2D(tDiffuse, vUv - off).g;
+          sum.b += texture2D(tDiffuse, vUv - off - dir * ca).b;
+        }
+        vec3 c = sum / float(TAPS);
+
+        vec2 d = vUv - 0.5;
+        c *= clamp(1.0 - dot(d, d) * vignette * speed, 0.0, 1.0);
+        gl_FragColor = vec4(c, 1.0);
+      }
+    `,
+  });
+
   composer.addPass(renderPass);
   composer.addPass(gtaoPass);
   composer.addPass(bloomPass);
   composer.addPass(new OutputPass());
   composer.addPass(gradePass);
+  composer.addPass(speedPass);
   composer.setSize(window.innerWidth, window.innerHeight);
   composer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
   // debug/tuning handle: toggle passes and tweak grade uniforms live
-  (window as any).__fx = { composer, gtaoPass, bloomPass, gradePass, renderPass };
+  (window as any).__fx = { composer, gtaoPass, bloomPass, gradePass, speedPass, renderPass };
 
   // --- reflection environment: real PBR reflections on metal + car paint ---
   const pmrem = new THREE.PMREMGenerator(renderer);
@@ -228,8 +290,31 @@ async function boot() {
     renderPass.camera = camera;
     gtaoPass.scene = scene;
     gtaoPass.camera = camera as THREE.PerspectiveCamera;
+
+    // speed presentation: ramp in from a walking pace so cruising around the
+    // arena is clean and only real speed smears, and project the car's own
+    // heading to screen space so the blur streaks away from where it is going
+    if (game && game.player) {
+      const v = game.player;
+      const sp = v.forwardSpeed ?? 0;
+      const target = THREE.MathUtils.clamp((Math.abs(sp) - 11) / 26, 0, 1);
+      speedLevel += (target - speedLevel) * 0.09;    // eased: raw speed jitters
+      speedPass.uniforms.speed.value = speedLevel * speedLevel;
+      if (speedLevel > 0.01) {
+        _focus.copy(v.position).addScaledVector(v.forward, 26).project(camera);
+        speedPass.uniforms.focus.value.set(
+          THREE.MathUtils.clamp(_focus.x * 0.5 + 0.5, 0.2, 0.8),
+          THREE.MathUtils.clamp(_focus.y * 0.5 + 0.5, 0.2, 0.8),
+        );
+      }
+    } else {
+      speedLevel = 0;
+      speedPass.uniforms.speed.value = 0;
+    }
     composer.render();
   }
+  let speedLevel = 0;
+  const _focus = new THREE.Vector3();
 
   const input = new Input();
   const hud = new Hud();
