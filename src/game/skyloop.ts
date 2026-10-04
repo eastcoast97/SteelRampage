@@ -148,6 +148,8 @@ const RAMP_RUN_SAMPLES = 16;
 const RAMP_HALF_W = 5.5;
 /** must exceed DECK_HALF_W + RAMP_HALF_W so the climb stays clear of the deck */
 const RAMP_OFFSET = DECK_HALF_W + RAMP_HALF_W - 1;
+/** above this height the ramp rides on piers instead of a solid embankment */
+const EARTH_TOP = 2.6;
 
 /**
  * Where the merge lane's centre is at step k of its run, and how high.
@@ -638,11 +640,15 @@ function buildOnRamp(o: SkyLoopOpts, s: Sample[], at: number) {
     const c = a + STRIDE, d = c + 1, lc = c + 2, rc = c + 3;
     idx.push(a, c, b, b, c, d);              // road surface
     idxRoad.push(a, c, b, b, c, d);
-    // Skirt only the raised part. Walling the section where the lane emerges
-    // from the tarmac turns the entrance itself into a kerb and the car can no
-    // longer get on at all — the whole point of the buried lead-in is that it
-    // is a thin wedge you drive straight over.
-    if (pos[a * 3 + 1] > 0.5 && pos[c * 3 + 1] > 0.5 && outside[k] && outside[k + 1]) {
+    // Skirt ONLY the low earth section. Carrying the embankment all the way up
+    // turned the ramp into an 88m solid wall, which boxed in dead-end alleys
+    // between it and the nearby buildings — you could drive in and have nowhere
+    // to go. Above EARTH_TOP the lane rides on piers like the main deck does,
+    // so the space underneath stays open. The very bottom is left unskirted too:
+    // walling where the lane emerges from the tarmac turns the entrance itself
+    // into a kerb and the car cannot get on at all.
+    const lowEnough = pos[a * 3 + 1] < EARTH_TOP && pos[c * 3 + 1] < EARTH_TOP;
+    if (pos[a * 3 + 1] > 0.5 && pos[c * 3 + 1] > 0.5 && lowEnough) {
       idx.push(la, a, lc, lc, a, c);         // left skirt
       idx.push(b, ra, d, d, ra, rc);         // right skirt
     }
@@ -677,6 +683,30 @@ function buildOnRamp(o: SkyLoopOpts, s: Sample[], at: number) {
   // UNDER the deck — measured 9.6 against the deck's soffit at 9.8 — so looking
   // up at it you saw tarmac again. Where the skirts do exist this sits buried
   // inside the embankment and costs nothing.
+  // piers for everything above the earth section, matching the deck's legs
+  const pierGeos: THREE.BufferGeometry[] = [];
+  const pierBody = o.world.createRigidBody(RAPIER.RigidBodyDesc.fixed());
+  for (let k = 2; k <= RUN; k += 2) {
+    const a = k * STRIDE;
+    const cx = (pos[a * 3] + pos[(a + 1) * 3]) / 2;
+    const cy = (pos[a * 3 + 1] + pos[(a + 1) * 3 + 1]) / 2;
+    const cz = (pos[a * 3 + 2] + pos[(a + 1) * 3 + 2]) / 2;
+    if (cy < EARTH_TOP) continue;
+    const h = Math.max(1, cy - 0.3);
+    o.world.createCollider(
+      RAPIER.ColliderDesc.cuboid(0.55, h / 2, 0.55).setTranslation(cx, h / 2, cz),
+      pierBody,
+    );
+    const pg = new THREE.BoxGeometry(1.1, h, 1.1);
+    pg.translate(cx, h / 2, cz);
+    pierGeos.push(pg);
+  }
+  if (pierGeos.length) {
+    const pm = new THREE.Mesh(mergeGeometries(pierGeos), o.trimMaterial);
+    pm.castShadow = true;
+    o.scene.add(pm);
+  }
+
   const soffitGeo = new THREE.BufferGeometry();
   soffitGeo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
   soffitGeo.setIndex(idxRoad);
