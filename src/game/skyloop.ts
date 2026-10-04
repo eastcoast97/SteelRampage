@@ -348,6 +348,10 @@ function buildDeck(o: SkyLoopOpts, s: Sample[]) {
   const pos: number[] = [];
   const uv: number[] = [];
   const idx: number[] = [];
+  // road triangles kept separately: the soffit must mirror ONLY these. Cloning
+  // the skirts too drops a second copy 0.42m inside the embankment, which
+  // z-fights with the real skirt and stipples the whole face.
+  const idxRoad: number[] = [];
   const outside: boolean[] = [];
   const m = new THREE.Matrix4();
   const q = new THREE.Quaternion();
@@ -559,6 +563,10 @@ function buildOnRamp(o: SkyLoopOpts, s: Sample[], at: number) {
   const pos: number[] = [];
   const uv: number[] = [];
   const idx: number[] = [];
+  // road triangles kept separately: the soffit must mirror ONLY these. Cloning
+  // the skirts too drops a second copy 0.42m inside the embankment, which
+  // z-fights with the real skirt and stipples the whole face.
+  const idxRoad: number[] = [];
   const outside: boolean[] = [];
   const right = new THREE.Vector3();
   const _flat = new THREE.Vector3();
@@ -629,6 +637,7 @@ function buildOnRamp(o: SkyLoopOpts, s: Sample[], at: number) {
     const a = k * STRIDE, b = a + 1, la = a + 2, ra = a + 3;
     const c = a + STRIDE, d = c + 1, lc = c + 2, rc = c + 3;
     idx.push(a, c, b, b, c, d);              // road surface
+    idxRoad.push(a, c, b, b, c, d);
     // Skirt only the raised part. Walling the section where the lane emerges
     // from the tarmac turns the entrance itself into a kerb and the car can no
     // longer get on at all — the whole point of the buried lead-in is that it
@@ -663,9 +672,16 @@ function buildOnRamp(o: SkyLoopOpts, s: Sample[], at: number) {
   mesh.receiveShadow = true;
   mesh.castShadow = true;
   o.scene.add(mesh);
-  // No soffit here. The ramp's skirts already carry it down to the ground, so a
-  // floating copy 0.42m below just leaves an open gap you can see straight
-  // through — it reads as the ramp being semi-transparent.
+  // The ramp needs a soffit too. The skirts close its sides, but near the merge
+  // they stop (the deck carries the lane there) and the lane itself hangs just
+  // UNDER the deck — measured 9.6 against the deck's soffit at 9.8 — so looking
+  // up at it you saw tarmac again. Where the skirts do exist this sits buried
+  // inside the embankment and costs nothing.
+  const soffitGeo = new THREE.BufferGeometry();
+  soffitGeo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  soffitGeo.setIndex(idxRoad);
+  soffitGeo.computeVertexNormals();
+  o.scene.add(underside(soffitGeo, o.trimMaterial));
 }
 
 /**
@@ -679,13 +695,14 @@ function buildOnRamp(o: SkyLoopOpts, s: Sample[], at: number) {
 function underside(geo: THREE.BufferGeometry, mat: THREE.Material): THREE.Mesh {
   const g = geo.clone();
   g.translate(0, -0.42, 0);
-  // BackSide is the whole point. The clone keeps the deck's upward-facing
-  // winding, so with the trim material's default FrontSide every triangle is
-  // back-face culled when you look up at it — the soffit renders as nothing and
-  // you see the deck's own DoubleSide underside, which is tarmac and lane
-  // markings on the bottom of the viaduct.
+  // DoubleSide, deliberately, because the surfaces this wraps do NOT agree on
+  // winding: the deck builds its cross-sections with cross(up, fwd) while the
+  // ramp uses (-fwd.z, 0, fwd.x), which is the negative of it, so the ramp's
+  // triangles are mirrored. BackSide fixed the deck and left the ramp showing
+  // tarmac from below on 209 of 6400 probe points. The soffit sits 0.42m under
+  // an opaque road, so rendering its top face too costs nothing.
   const m = new THREE.Mesh(g, (mat as THREE.Material).clone());
-  (m.material as THREE.Material).side = THREE.BackSide;
+  (m.material as THREE.Material).side = THREE.DoubleSide;
   m.castShadow = true;
   return m;
 }
