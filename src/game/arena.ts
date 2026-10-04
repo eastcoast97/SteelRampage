@@ -1,4 +1,5 @@
 import RAPIER from '@dimforge/rapier3d-compat';
+import { addScatter } from './scatter';
 import * as THREE from 'three';
 import type { PickupType } from './pickups';
 import type { PedZone } from './peds';
@@ -825,6 +826,27 @@ function makeSignTexture(lines: string[], bg: string, fg: string): THREE.CanvasT
 
 // ---------------------------------------------------------------- arena
 
+/** Ground clutter for whichever arena we ended up building. Called last so the
+ *  occupancy grid sees every building, prop and ramp already in the scene. */
+function scatterClutter(
+  scene: THREE.Scene, half: number, arenaIdx: number,
+  data: { spawnPoints: { pos: THREE.Vector3 }[]; pickupPoints: { pos: THREE.Vector3 }[];
+          barrelPoints: THREE.Vector3[]; boostPads: { x: number; z: number }[] },
+): void {
+  addScatter({
+    scene, half,
+    streets: arenaIdx === 1 ? STREETS_DOCKS : STREETS,
+    keepClear: [
+      ...data.spawnPoints.map((s) => s.pos),
+      ...data.pickupPoints.map((s) => s.pos),
+      ...data.barrelPoints,
+      ...data.boostPads.map((b) => new THREE.Vector3(b.x, 0, b.z)),
+    ],
+    palette: arenaIdx === 1 ? 'cold' : 'warm',
+    seed: 0x57EE1 + arenaIdx,
+  });
+}
+
 export function buildArena(world: RAPIER.World, scene: THREE.Scene, forcedSkyIdx?: number, arenaIdx = 0): ArenaData {
   const H = ARENA_HALF;
 
@@ -1151,6 +1173,7 @@ export function buildArena(world: RAPIER.World, scene: THREE.Scene, forcedSkyIdx
   if (glb) {
     const data = consumeArenaGLB(world, scene, glb);
     for (const pad of data.boostPads) padVisual(pad.x, pad.y, pad.z, pad.hx >= pad.hz);
+    scatterClutter(scene, H, arenaIdx, data);
     return { ...data, skyIdx, envColors: { top: sky.top, hor: sky.hor } };
   }
 
@@ -1467,6 +1490,8 @@ export function buildArena(world: RAPIER.World, scene: THREE.Scene, forcedSkyIdx
     { x: 41, z: -41, hx: 4, hz: 4 },
     { x: -41, z: 41, hx: 4, hz: 4 },
   ];
+
+  scatterClutter(scene, H, arenaIdx, { spawnPoints, pickupPoints, barrelPoints, boostPads });
 
   return { spawnPoints, pickupPoints, barrelPoints, pedZones, boostPads, pumpPoints: [], skyIdx, envColors: { top: sky.top, hor: sky.hor } };
 }
