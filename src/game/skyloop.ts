@@ -171,11 +171,12 @@ function laneAt(s: Sample[], at: number, k: number): { x: number; z: number; y: 
   const len = Math.hypot(rx, rz) || 1;
   const inward = (rx / len) * sm.pos.x + (rz / len) * sm.pos.z >= 0 ? -1 : 1;
   const lateral = inward * RAMP_OFFSET * (1 - lT);
-  const joinY = s[at % n].pos.y;
   return {
     x: sm.pos.x + (rx / len) * lateral,
     z: sm.pos.z + (rz / len) * lateral,
-    y: joinY * hT - 0.06 * lT - 0.3 * (1 - hT),
+    // local deck height, matching buildOnRamp — see the note there on why a
+    // single join height leaves the lane below the deck across the merge
+    y: sm.pos.y * hT - 0.06 * lT - 0.3 * (1 - hT),
   };
 }
 
@@ -573,11 +574,15 @@ function buildOnRamp(o: SkyLoopOpts, s: Sample[], at: number) {
   const right = new THREE.Vector3();
   const _flat = new THREE.Vector3();
   const smoothstep = (t: number) => t * t * (3 - 2 * t);
-  // Climb toward the height of the JOIN, not toward each sample's own deck
-  // height. The deck undulates, so using the local height made the lane hump
-  // 2.4m above its own join and come back down — an unnecessary crest right
-  // where the driver is trying to merge.
-  const joinY = s[at % n].pos.y;
+  // Track the LOCAL deck height, not the height at the join sample.
+  //
+  // Climbing to a single joinY looked tidier — no hump — but it is wrong: the
+  // deck undulates, so a lane held at the join's height runs 1.1-3.4m BELOW the
+  // deck over the whole merge stretch, and the deck becomes a wall you cannot
+  // drive up onto. Measured across the merge: lane flat at 9.5 against deck at
+  // 10.1, 10.7, 11.3, 12.25. Following the local height means the lane is at
+  // deck level wherever it happens to merge, which is the only property that
+  // actually matters.
 
   for (let k = 0; k <= RUN; k++) {
     // Stop a fraction short of the deck rather than landing exactly on it. At
@@ -615,7 +620,7 @@ function buildOnRamp(o: SkyLoopOpts, s: Sample[], at: number) {
     // than butting against it. Coplanar with the road leaves a seam to catch
     // and z-fights; a bridge touching down should just appear out of the
     // tarmac. The bias fades out as the lane climbs.
-    const y = joinY * hT - 0.06 * lT - 0.3 * (1 - hT);
+    const y = sm.pos.y * hT - 0.06 * lT - 0.3 * (1 - hT);
     const centre = new THREE.Vector3(sm.pos.x, y, sm.pos.z).addScaledVector(rightFlat, lateral);
     // level where it leaves the road, banked to match where it joins the deck
     const across = rightFlat.clone().lerp(right, lT).normalize();
