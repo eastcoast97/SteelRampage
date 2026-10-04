@@ -137,6 +137,12 @@ ROOT CAUSE: the deck and the ramp build their cross-sections with OPPOSITE HANDE
 ALSO: ramps had no soffit at all — near a merge the lane hangs just UNDER the deck (measured lane 9.6 vs deck soffit 9.8) and was exposed. And the soffit must be built from the ROAD triangles ONLY: cloning the skirts too drops a second copy 0.42m inside the embankment, which z-fights and stipples the whole face.
 AUDIT METHOD worth reusing: dense upward-raycast grid (4m spacing, y=1.5, 6400 points) classifying the first hit as textured vs untextured. It located the exposed region immediately after two screenshots had been inconclusive. CAVEAT: "has a map" flags any textured surface — the 96 residual hits were `TunRoofSW`, the neon tunnel ceiling seen from inside a tunnel, which is correct.
 Verified: 0 skyloop points show road from below; spawn clearance min 98m ahead / 16.1m side (the only closer thing a 1.1m pier at 6.6m); 3 entrances drivable (118/103/119); town soak 954–1160m, no errors.
+Phase 3.7f (fix): **night glare blew out the frame** (user). Caused by TWO of my own changes interacting, neither wrong alone:
+  * the wet-asphalt pass set night roads to roughness 0.45 / metalness 0.45 / envMapIntensity 2.4 — a near-perfect reflector;
+  * `BLOOM_BY_SKY` night thresholds (0.95/0.60, 1.05/0.55) were tuned BEFORE roads were reflective, for a world where only emissive neon exceeded them.
+A headlight on a mirror road returns a specular spike far above 0.95, and bloom at strength 0.6 smeared it over most of the screen. Fixed on both sides: roads damped to 0.62/0.22/1.2 (deck 0.64/0.20/1.1), night thresholds lifted to 1.45/0.42 and 1.50/0.40. Day and sunbaked are untouched — `wet` is `skyIdx >= 2`, and their bloom entries were already correct.
+**LESSON: per-preset bloom thresholds are coupled to material gloss.** Any change to roughness/metalness/envMapIntensity on a large surface invalidates the thresholds tuned against it; re-check all four presets after touching either.
+`window.__forceSky = 0..3` pins the sky preset (arena.ts) — lighting bugs are per-preset and reloading until the random roll cooperates is slow and flaky.
 TEST GOTCHA: a path-follow controller must steer toward a point AHEAD (`pos + fwd*d`); aiming at `pos − fwd*d` silently drives into the outer rail and looks exactly like a track defect. Two "wedges" chased in this phase were that sign error, not geometry.
 
 Ideas: gamepad support, energy attacks (freeze), split-screen, dedicated server-sim (extract game.step from THREE/DOM), interpolation-delay auto-tuning from jitter.

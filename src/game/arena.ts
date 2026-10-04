@@ -936,8 +936,8 @@ function addSkyLoop(
     avoid: data.spawnPoints.map((sp) => sp.pos),
     deckMaterial: new THREE.MeshStandardMaterial({
       map: deckMaps.map, roughnessMap: deckMaps.rough,
-      roughness: wet ? 0.5 : 1, metalness: wet ? 0.4 : 0.08,
-      envMapIntensity: wet ? 2.0 : 0.8, side: THREE.DoubleSide,
+      roughness: wet ? 0.64 : 1, metalness: wet ? 0.2 : 0.08,
+      envMapIntensity: wet ? 1.1 : 0.8, side: THREE.DoubleSide,
     }),
     trimMaterial: new THREE.MeshStandardMaterial({
       color: 0x3a3742, roughness: 0.75, metalness: 0.45,
@@ -989,7 +989,12 @@ export function buildArena(world: RAPIER.World, scene: THREE.Scene, forcedSkyIdx
   ];
   // weighted pick for the town; the docks always run their neon night
   const roll = Math.random();
-  const skyIdx = forcedSkyIdx ?? (arenaIdx === 1 ? 3 : roll < 0.5 ? 0 : roll < 0.75 ? 1 : 2);
+  // `window.__forceSky` pins the preset for testing. Lighting bugs are usually
+  // specific to one sky (bloom thresholds are per-preset), and reloading until
+  // the random roll gives you the right one is slow and flaky.
+  const debugSky = (window as unknown as { __forceSky?: number }).__forceSky;
+  const skyIdx = forcedSkyIdx ?? debugSky
+    ?? (arenaIdx === 1 ? 3 : roll < 0.5 ? 0 : roll < 0.75 ? 1 : 2);
   const sky = SKY_PRESETS[skyIdx];
 
   // gradient dome
@@ -1142,9 +1147,11 @@ export function buildArena(world: RAPIER.World, scene: THREE.Scene, forcedSkyIdx
     maps.rough.repeat.set(1, repY);
     return new THREE.MeshStandardMaterial({
       map: maps.map, roughnessMap: maps.rough,
-      roughness: wet ? 0.45 : 1,
-      metalness: wet ? 0.45 : 0.06,
-      envMapIntensity: wet ? 2.4 : 0.75,
+      // Damp, not a mirror. The first pass at this (0.45/0.45/2.4) turned the
+      // road into a near-perfect reflector and headlights blew the frame out.
+      roughness: wet ? 0.62 : 1,
+      metalness: wet ? 0.22 : 0.06,
+      envMapIntensity: wet ? 1.2 : 0.75,
       color: wet ? 0x8f96a6 : 0xffffff,
     });
   };

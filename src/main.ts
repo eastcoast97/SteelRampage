@@ -113,9 +113,12 @@ async function boot() {
   const BLOOM_BY_SKY: { threshold: number; strength: number }[] = [
     { threshold: 3.0, strength: 0.30 },   // 0 sunbaked — daylight, barely any glow
     { threshold: 2.6, strength: 0.32 },   // 1 day
-    { threshold: 0.95, strength: 0.60 },  // 2 night — neon/windows carry the look
-    { threshold: 1.05, strength: 0.55 },  // 3 neonNight (docks) — lit windows
-                                          // were blowing into white slabs
+    // Night thresholds were set before the roads were made reflective. A wet
+    // road returns a headlight as a specular spike far above 0.95, and at
+    // strength 0.6 that smeared across most of the screen. Lifted so only
+    // genuinely emissive things — neon, windows, fire — still glow.
+    { threshold: 1.45, strength: 0.42 },  // 2 night
+    { threshold: 1.50, strength: 0.40 },  // 3 neonNight (docks)
 
   ];
   const bloomPass = new UnrealBloomPass(
