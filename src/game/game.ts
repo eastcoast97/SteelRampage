@@ -676,6 +676,7 @@ export class Game {
       end = muzzle.clone().addScaledVector(dir, MG_RANGE);
     }
     this.effects.tracer(muzzle, end, minigun ? 0xff7733 : v.overdriveTime > 0 ? 0xff55ee : 0xffd070);
+    this.effects.muzzleFlash(muzzle, dir);
     if (v === this.player) sfx.shoot();
     else if (v.position.distanceTo(this.player.position) < 38 && Math.random() < 0.5) sfx.shoot();
   }
