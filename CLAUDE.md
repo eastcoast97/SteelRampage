@@ -95,6 +95,16 @@ Phase 3.6 (in progress): **NFS-Most-Wanted-grade FEEL pass** (user ref: MW2005 �
 PERF MEASUREMENT GOTCHA: `composer.render()` returns before the GPU finishes, so CPU timers around it report post passes as FREE (measured the speed pass as *faster* than disabling it). Measure sustained rAF frame rate instead.
 Verified: town soak 1118-1740m w/ kills; docks soak 609-1722m w/ kills, 5917 clutter instances, no errors.
 
+Phase 3.7 (done): **THE SKYLOOP** — a drivable elevated circuit around both arenas (`src/game/skyloop.ts`, built from `addSkyLoop` in arena.ts for GLB and procedural paths alike). User ref: Twisted Metal map scale + Hot Wheels track. DECISION: did NOT enlarge the 320×320 footprint — it is tuned for 6 cars and widening it hurts encounter cadence; the loop adds a second storey instead, doubling usable space without increasing the distance between players.
+Layout: rounded-rect centreline at |x|/|z| = half−22 with r34 corners, 16m deck, height 12.5 ±4.2 (two crests, two dips), banked into corners, guard rails, 4 boost pads + 2 pickups on the deck, 2 on-ramps from street level, 4 break-out gaps. **Routed over the perimeter ROAD on purpose** — guarantees it is clear of buildings with no occupancy test, and anything falling off lands on tarmac. Pylons drop from the deck's OUTER edge into the verge so the ground-level route underneath stays unobstructed.
+**FOUR GEOMETRY BUGS, all found by settle-probing lanes at ±0/3/6m and all of the same family — blunt faces and protrusions on the racing line:**
+(1) Pylons run to deck height poked UP THROUGH the deck at the outer edge = invisible bollards; stopped a 37 m/s run dead. Stop legs at `deckY − DECK_THICK*2 − 0.9`.
+(2) Per-segment cuboid deck colliders: in a BANKED corner the overlapping rotated boxes push their inner corners through the surface — centreline probed clean but inner lanes had 0.59–0.86m ridges. **Replaced with ONE TRIMESH built from the same vertices as the visual ribbon** → 0 steps at lanes 0 and ±6. Use trimesh for any curved/banked track surface; boxes only work on straights.
+(3) Kicker ramps as raised slabs present a blunt END FACE to anyone arriving along the track — wedged cars twice, through two redesigns (raise+roll, then pitch+bury). Final form is a **trimesh wedge with a ZERO-HEIGHT LEADING EDGE** (13m long, ~5°, outer lip 1.15m) which cannot be hit side-on at all.
+(4) On-ramp tops meeting the deck exactly leave a lip; drop them 0.55 UNDER so the deck always wins the overlap.
+Verified: 3 complete laps under a path-follow controller, 0 stalls, never fell off, avg 25.6 m/s / top 36; centreline probe 376 samples 0 gaps 0 steps; break-out = 68 airborne frames, lands on the road at 100% health and drives away; bot soak 1051–1772m, 0.51ms/frame.
+TEST GOTCHA: a path-follow controller must steer toward a point AHEAD (`pos + fwd*d`); aiming at `pos − fwd*d` silently drives into the outer rail and looks exactly like a track defect. Two "wedges" chased in this phase were that sign error, not geometry.
+
 Ideas: gamepad support, energy attacks (freeze), split-screen, dedicated server-sim (extract game.step from THREE/DOM), interpolation-delay auto-tuning from jitter.
 
 ## Testing recipe (headless, in preview eval)

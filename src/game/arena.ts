@@ -1,5 +1,6 @@
 import RAPIER from '@dimforge/rapier3d-compat';
 import { addScatter } from './scatter';
+import { buildSkyLoop } from './skyloop';
 import * as THREE from 'three';
 import type { PickupType } from './pickups';
 import type { PedZone } from './peds';
@@ -919,6 +920,35 @@ function makeSignTexture(lines: string[], bg: string, fg: string): THREE.CanvasT
 
 // ---------------------------------------------------------------- arena
 
+/** The elevated circuit. Built for both arenas, after the ground layout so its
+ *  pickups and boost pads can be appended to whatever the arena already has. */
+function addSkyLoop(
+  world: RAPIER.World, scene: THREE.Scene, half: number, skyIdx: number,
+  data: { pickupPoints: ArenaData['pickupPoints']; boostPads: ArenaData['boostPads'] },
+): void {
+  const wet = skyIdx >= 2;
+  const deckMaps = makeRoadMaps('highway');
+  deckMaps.map.repeat.set(1, 1);
+  deckMaps.rough.repeat.set(1, 1);
+  const res = buildSkyLoop({
+    world, scene, half,
+    deckMaterial: new THREE.MeshStandardMaterial({
+      map: deckMaps.map, roughnessMap: deckMaps.rough,
+      roughness: wet ? 0.5 : 1, metalness: wet ? 0.4 : 0.08,
+      envMapIntensity: wet ? 2.0 : 0.8, side: THREE.DoubleSide,
+    }),
+    trimMaterial: new THREE.MeshStandardMaterial({
+      color: 0x3a3742, roughness: 0.75, metalness: 0.45,
+    }),
+    neonMaterial: new THREE.MeshStandardMaterial({
+      color: 0xff7a1a, emissive: 0xff5a00, emissiveIntensity: 1.9, roughness: 0.45,
+    }),
+  });
+  data.boostPads.push(...res.boostPads);
+  data.pickupPoints.push(...res.pickupPoints);
+}
+
+
 /** Ground clutter for whichever arena we ended up building. Called last so the
  *  occupancy grid sees every building, prop and ramp already in the scene. */
 function scatterClutter(
@@ -1276,6 +1306,7 @@ export function buildArena(world: RAPIER.World, scene: THREE.Scene, forcedSkyIdx
   const glb = getArenaScene(arenaIdx);
   if (glb) {
     const data = consumeArenaGLB(world, scene, glb);
+    addSkyLoop(world, scene, H, skyIdx, data);
     for (const pad of data.boostPads) padVisual(pad.x, pad.y, pad.z, pad.hx >= pad.hz);
     scatterClutter(scene, H, arenaIdx, data);
     return { ...data, skyIdx, envColors: { top: sky.top, hor: sky.hor } };
@@ -1595,6 +1626,7 @@ export function buildArena(world: RAPIER.World, scene: THREE.Scene, forcedSkyIdx
     { x: -41, z: 41, hx: 4, hz: 4 },
   ];
 
+  addSkyLoop(world, scene, H, skyIdx, { pickupPoints, boostPads });
   scatterClutter(scene, H, arenaIdx, { spawnPoints, pickupPoints, barrelPoints, boostPads });
 
   return { spawnPoints, pickupPoints, barrelPoints, pedZones, boostPads, pumpPoints: [], skyIdx, envColors: { top: sky.top, hor: sky.hor } };
