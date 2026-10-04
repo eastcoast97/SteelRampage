@@ -44,6 +44,25 @@ export interface SkyLoopResult {
   pickupPoints: { pos: THREE.Vector3; type: PickupType }[];
 }
 
+/**
+ * Where the loop's entrances and exits ended up, in world space.
+ *
+ * The layout is derived from arc-length sampling, so the only way to know where
+ * a ramp foot actually landed is to ask the builder — hand-deriving it from
+ * sample indices is error-prone enough that it cost several wrong test runs.
+ * Also the natural input for teaching bots to use the loop later.
+ */
+export const SKYLOOP_NODES: {
+  rampFeet: THREE.Vector3[];
+  rampTops: THREE.Vector3[];
+  breakouts: THREE.Vector3[];
+} = { rampFeet: [], rampTops: [], breakouts: [] };
+
+// Debug handle, same convention as window.__game / window.__fx. A dynamic
+// import of this module from the console gets a SEPARATE instance under Vite,
+// so reading the export directly comes back empty.
+(window as unknown as { __skyloop: typeof SKYLOOP_NODES }).__skyloop = SKYLOOP_NODES;
+
 const DECK_HALF_W = 8;        // 16m deck — two cars abreast with room to fight
 const DECK_THICK = 0.35;
 const RAIL_H = 1.15;
@@ -161,11 +180,37 @@ export function buildSkyLoop(o: SkyLoopOpts): SkyLoopResult {
   });
 
   // on-ramps climb from street level at two opposite points
-  const ramps = [Math.floor(n * 0.04), Math.floor(n * 0.54)];
+  // East and west sides. NOT the south edge: the pre-existing skyway runs along
+  // z = 115..125 for x = -90..90, and a ramp climbing 16m inboard there drives
+  // straight through it.
+  //
+  // The exact sample matters. A ramp whose run crosses a corner climbs along a
+  // curve, so the driver has to follow an arc that never points at the entrance
+  // — needlessly hard to use. Search near the target fraction for the sample
+  // whose whole run sits on straight track.
+  const RAMP_RUN = 16;
+  const straightest = (frac: number) => {
+    let best = Math.floor(n * frac), bestCurve = Infinity;
+    for (let d = -16; d <= 16; d++) {
+      const i = (Math.floor(n * frac) + d + n) % n;
+      let worst = 0;
+      for (let k = 0; k <= RAMP_RUN; k++) worst = Math.max(worst, Math.abs(banked[(i - k + n * 2) % n]));
+      if (worst < bestCurve) { bestCurve = worst; best = i; }
+    }
+    return best;
+  };
+  const ramps = [straightest(0.37), straightest(0.87)];
+  // the rail has to stay open for the WHOLE merge lane, not just at its head,
+  // or the ramp arrives alongside a barrier it cannot cross
   const inRamp = (i: number) => ramps.some((r) => {
-    const d = Math.abs(((i - r + n + n / 2) % n) - n / 2);
-    return d < 3;
+    const d = ((r - i + n * 2) % n);
+    return d <= 17;
   });
+
+  SKYLOOP_NODES.rampFeet.length = 0;
+  SKYLOOP_NODES.rampTops.length = 0;
+  SKYLOOP_NODES.breakouts.length = 0;
+  for (const g of gaps) SKYLOOP_NODES.breakouts.push(samples[g % n].pos.clone());
 
   buildDeck(o, samples);
   buildRails(o, samples, (i) => inGap(i) || inRamp(i));
@@ -387,38 +432,93 @@ function buildPylons(o: SkyLoopOpts, s: Sample[]) {
   o.scene.add(mesh);
 }
 
-/** a straight climb from street level up to the deck */
+/**
+ * An on-ramp built as a MERGE LANE rather than a straight slope into the side
+ * of the deck.
+ *
+ * The first version ran perpendicular to the track and had its top end dropped
+ * 0.55m under the deck so the deck would win the overlap. That reasoning was
+ * backwards: the direction that matters is driving UP, and a top end below the
+ * deck is a 0.55m step straight into the front wheels. It blocked the entry
+ * completely.
+ *
+ * So the ramp now follows the track's own centreline for its whole run,
+ * starting wide on the inside at ground level and easing both its lateral
+ * offset and its height to zero exactly where it meets the deck. The height
+ * uses smoothstep, which has zero gradient at both ends — flat where it leaves
+ * the road and flat where it joins the deck — so the junction is tangent
+ * continuous and there is no lip in either direction.
+ */
 function buildOnRamp(o: SkyLoopOpts, s: Sample[], at: number) {
   const n = s.length;
-  const sm = s[at % n];
-  const right = new THREE.Vector3().crossVectors(sm.up, sm.fwd).normalize();
-  const inward = right.dot(sm.pos) >= 0 ? -1 : 1;
-  // Drop the top end UNDER the deck and lengthen the run. A ramp whose top
-  // meets the deck surface exactly leaves a lip at the junction — probing the
-  // inner lanes found 0.6-0.86m steps there, which is enough to clip a car at
-  // speed. Sliding it below means the deck always wins the overlap and the
-  // ramp simply disappears beneath it.
-  const top = new THREE.Vector3().copy(sm.pos).addScaledVector(sm.up, -0.55);
-  const run = sm.pos.y * 4.6;                 // ~12 degree climb
-  const foot = new THREE.Vector3().copy(top).addScaledVector(right, inward * run).setY(0);
+  const RUN = 16;                 // must match RAMP_RUN in buildSkyLoop
+  const HALF_W = 5.5;
+  // The lane's outer edge must MEET the deck's inner edge. Too small and the
+  // lane runs underneath the deck and traps the car; too large (16 was tried)
+  // and a gap opens between them that the car drops straight into while
+  // merging. Sitting them 1m overlapped is the only arrangement that is
+  // continuous the whole way across.
+  const OFFSET = DECK_HALF_W + HALF_W - 1;
 
-  const dir = new THREE.Vector3().subVectors(top, foot);
-  const len = dir.length();
-  dir.normalize();
-  const mid = new THREE.Vector3().addVectors(top, foot).multiplyScalar(0.5);
-  const q = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 0, 1), dir);
+  const pos: number[] = [];
+  const idx: number[] = [];
+  const right = new THREE.Vector3();
+  const _flat = new THREE.Vector3();
+  const smoothstep = (t: number) => t * t * (3 - 2 * t);
+
+  for (let k = 0; k <= RUN; k++) {
+    // Stop a fraction short of the deck rather than landing exactly on it. At
+    // t = 1 the ramp's last segment is COINCIDENT with the deck trimesh, and two
+    // overlapping surfaces in the same plane trap a car — it climbed the ramp
+    // fine and then stopped dead the moment it arrived. Ending at ~0.93 leaves
+    // a sub-20cm lip instead, which drives straight over.
+    const t = k / (RUN + 1);
+    const sm = s[(at - RUN + k + n * 2) % n];
+    right.crossVectors(sm.up, sm.fwd).normalize();
+    // The deck's `right` is BANKED, so offsetting along it by 16m in a 24-degree
+    // corner drags the ramp 6.5m UNDERGROUND. Offsets have to run horizontally;
+    // the bank is only blended back in as the lane merges onto the deck.
+    const rightFlat = _flat.set(-sm.fwd.z, 0, sm.fwd.x).normalize();
+    const inward = rightFlat.dot(sm.pos) >= 0 ? -1 : 1;
+    // slide in toward the deck centreline while climbing
+    // Climb and merge on SEPARATE curves. Easing both together means the ramp
+    // spends its whole run beneath the deck — which is full width at every
+    // sample — so the car ends up trapped in a shrinking wedge with the deck as
+    // a ceiling and jams about 8m short of the top. Instead: stay clear of the
+    // deck laterally (OFFSET > DECK_HALF_W + HALF_W) while doing all the
+    // climbing, then slide across only once already at deck height.
+    const hT = smoothstep(Math.min(1, t / 0.78));
+    const lT = smoothstep(Math.max(0, (t - 0.72) / 0.28));
+    const lateral = inward * OFFSET * (1 - lT);
+    const y = sm.pos.y * hT - 0.06 * lT;      // a hair low, never coincident
+    const centre = new THREE.Vector3(sm.pos.x, y, sm.pos.z).addScaledVector(rightFlat, lateral);
+    // level where it leaves the road, banked to match where it joins the deck
+    const across = rightFlat.clone().lerp(right, lT).normalize();
+    const l = centre.clone().addScaledVector(across, -HALF_W);
+    const r = centre.clone().addScaledVector(across, HALF_W);
+    pos.push(l.x, l.y, l.z, r.x, r.y, r.z);
+  }
+  for (let k = 0; k < RUN; k++) {
+    const a = k * 2, b = a + 1, c = a + 2, d = a + 3;
+    idx.push(a, c, b, b, c, d);
+  }
+
+  // record the centre of the first and last cross-sections
+  SKYLOOP_NODES.rampFeet.push(new THREE.Vector3(
+    (pos[0] + pos[3]) / 2, (pos[1] + pos[4]) / 2, (pos[2] + pos[5]) / 2));
+  const L = pos.length;
+  SKYLOOP_NODES.rampTops.push(new THREE.Vector3(
+    (pos[L - 6] + pos[L - 3]) / 2, (pos[L - 5] + pos[L - 2]) / 2, (pos[L - 4] + pos[L - 1]) / 2));
 
   const body = o.world.createRigidBody(RAPIER.RigidBodyDesc.fixed());
   o.world.createCollider(
-    RAPIER.ColliderDesc.cuboid(DECK_HALF_W * 0.8, 0.3, len / 2)
-      .setTranslation(mid.x, mid.y, mid.z)
-      .setRotation({ x: q.x, y: q.y, z: q.z, w: q.w })
-      .setFriction(0.9),
+    RAPIER.ColliderDesc.trimesh(new Float32Array(pos), new Uint32Array(idx)).setFriction(0.9),
     body,
   );
-  const geo = new THREE.BoxGeometry(DECK_HALF_W * 1.6, 0.5, len);
-  geo.applyQuaternion(q);
-  geo.translate(mid.x, mid.y, mid.z);
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  geo.setIndex(idx);
+  geo.computeVertexNormals();
   const mesh = new THREE.Mesh(geo, o.deckMaterial);
   mesh.receiveShadow = true;
   o.scene.add(mesh);
