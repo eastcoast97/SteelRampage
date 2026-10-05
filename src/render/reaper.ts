@@ -141,6 +141,11 @@ export function buildReaper(spec: CarSpec, _colorOverride?: number): ReaperResul
     const boned = Math.max(1e-3, (hi - lo) * 1.16);
     man.scale.setScalar(man.scale.x * (1.78 / boned));
     poseSeated(bones);
+    // HE FACES THE CAMERA, NOT THE ROAD. The hero image was shot front-on, so
+    // the generated model's forward is +Z while the bike's is -Z — measured, his
+    // shoulder-line normal came back [0,0,1] — and he rode the whole thing
+    // sitting backwards. Turn him round.
+    man.rotation.y = Math.PI;
     // seated: measured so the HIP bone lands at saddle height rather than
     // eyeballing the model's own origin, which sits wherever the generator put it
     man.position.set(0, -0.10, 0.30);

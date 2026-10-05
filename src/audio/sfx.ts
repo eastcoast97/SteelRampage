@@ -481,51 +481,55 @@ class Sfx {
   }
 
   /**
-   * The release: an evil clown laugh.
+   * The throw: the saw leaves his hand.
    *
-   * Procedural like everything else here — a descending run of short vowel
-   * bursts. What sells it as a laugh rather than a siren is that each syllable
-   * bends DOWN in pitch across its own length and the run as a whole descends,
-   * and what sells it as nasty is the detuned second voice a semitone off.
+   * This replaced a synthesised laugh, and the reason is worth recording.
+   * Procedural vocal synthesis is the one thing WebAudio is genuinely bad at —
+   * formant-filtered sawtooths read as a synth lead imitating a voice, not as a
+   * person, and no amount of tuning the formants fixed it. A chainsaw being
+   * hurled through the air is MECHANICAL, and mechanical is what this synth is
+   * good at: a hard whoosh of band-passed noise sweeping upward as it leaves,
+   * and the chain whining down in pitch as it spins away.
    */
-  sawLaugh(vol = 1) {
+  sawThrow(vol = 1) {
     if (!this.ctx || !this.master) return;
-    // Starts a beat AFTER the call, on purpose: the slam fires an explosion in
-    // the same frame, and the laugh was landing underneath its transient and
-    // being masked completely. It now rides the explosion's decay instead.
-    const t0 = this.ctx.currentTime + 0.14;
-    const syllables = 8;
-    for (let i = 0; i < syllables; i++) {
-      const at = t0 + i * 0.135;
-      const base = 330 * Math.pow(0.9, i);          // the run falls away
-      // levels are high because the formant bandpasses throw most of the saw
-      // away — measured, not guessed
-      for (const [mult, level] of [[1, 4.2], [1.06, 2.5]] as const) {
-        const o = this.ctx.createOscillator();
-        o.type = 'sawtooth';
-        o.frequency.setValueAtTime(base * mult * 1.12, at);
-        o.frequency.exponentialRampToValueAtTime(base * mult * 0.82, at + 0.11);
-        const g = this.ctx.createGain();
-        g.gain.setValueAtTime(0.0001, at);
-        g.gain.exponentialRampToValueAtTime(level * vol, at + 0.012);
-        g.gain.exponentialRampToValueAtTime(0.0001, at + 0.115);
-        // Two formants, in PARALLEL. In series they measured QUIETER than the
-        // engine idle — cascading two narrow bandpasses leaves almost nothing,
-        // and parallel is how a vowel is actually built anyway.
-        for (const [hz, q, amt] of [[760, 4, 1], [1180, 5, 0.6]] as const) {
-          const f = this.ctx.createBiquadFilter();
-          f.type = 'bandpass'; f.frequency.value = hz; f.Q.value = q;
-          const fg = this.ctx.createGain(); fg.gain.value = amt;
-          o.connect(f).connect(fg).connect(g);
-        }
-        // a little dry signal keeps the body, so it reads as a voice not a filter
-        const dry = this.ctx.createGain(); dry.gain.value = 0.25;
-        o.connect(dry).connect(g);
-        g.connect(this.master);
-        o.start(at);
-        o.stop(at + 0.14);
-      }
-    }
+    const t = this.ctx.currentTime;
+
+    // WHOOSH — noise through a bandpass that sweeps up and out
+    const len = Math.floor(this.ctx.sampleRate * 0.5);
+    const buf = this.ctx.createBuffer(1, len, this.ctx.sampleRate);
+    const d = buf.getChannelData(0);
+    for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+    const src = this.ctx.createBufferSource();
+    src.buffer = buf;
+    const bp = this.ctx.createBiquadFilter();
+    bp.type = 'bandpass';
+    bp.Q.value = 1.6;
+    bp.frequency.setValueAtTime(420, t);
+    bp.frequency.exponentialRampToValueAtTime(2600, t + 0.16);
+    bp.frequency.exponentialRampToValueAtTime(900, t + 0.42);
+    const wg = this.ctx.createGain();
+    wg.gain.setValueAtTime(0.0001, t);
+    wg.gain.exponentialRampToValueAtTime(0.5 * vol, t + 0.03);
+    wg.gain.exponentialRampToValueAtTime(0.0001, t + 0.45);
+    src.connect(bp).connect(wg).connect(this.master);
+    src.start(t);
+
+    // CHAIN WHINE — the motor spinning away from you, dropping in pitch
+    const o = this.ctx.createOscillator();
+    o.type = 'sawtooth';
+    o.frequency.setValueAtTime(260, t);
+    o.frequency.exponentialRampToValueAtTime(90, t + 0.5);
+    const lp = this.ctx.createBiquadFilter();
+    lp.type = 'lowpass';
+    lp.frequency.value = 1500;
+    const og = this.ctx.createGain();
+    og.gain.setValueAtTime(0.0001, t);
+    og.gain.exponentialRampToValueAtTime(0.22 * vol, t + 0.02);
+    og.gain.exponentialRampToValueAtTime(0.0001, t + 0.5);
+    o.connect(lp).connect(og).connect(this.master);
+    o.start(t);
+    o.stop(t + 0.52);
   }
 
   /** heavy low thud — wall crashes and hard landings */

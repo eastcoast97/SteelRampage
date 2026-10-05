@@ -1191,8 +1191,8 @@ export class Game {
     if (this.netOpts?.role === 'host') {
       this.netEvents.push({ k: 'saw', x: +from.x.toFixed(1), y: +from.y.toFixed(1), z: +from.z.toFixed(1) });
     }
-    // the release is the laugh; the explosion only fires if it CONNECTS
-    sfx.sawLaugh(THREE.MathUtils.clamp(1.4 - from.distanceTo(this.player.position) / 60, 0.2, 1.2));
+    // the throw cue; the explosion only fires if it CONNECTS
+    sfx.sawThrow(THREE.MathUtils.clamp(1.4 - from.distanceTo(this.player.position) / 60, 0.2, 1.2));
   }
 
   /** the saw in flight: spins end over end, bites the first thing it reaches */

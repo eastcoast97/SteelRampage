@@ -225,7 +225,9 @@ Phase 3.14 (done): **REAPER composed from THREE generated models, and the saw is
 (4) Place a model in its OWN axes BEFORE any yaw. Measuring a world-axis bounding box of a rotated object does not give the object's extent, and that put the bike sideways at four times its size.
 The cut script also auto-detects the length axis (two generations of the same bike came back on different axes) and REFUSES outright if the contact band shows no gap worth calling a wheelbase — it had silently deleted 36,411 of 36,484 vertices.
 `SkeletonUtils.clone`, never `Object3D.clone`: a plain clone stays bound to the ORIGINAL skeleton, so every REAPER on the field would pose in lockstep.
-Verified: throw deals 36.0 through 55 armor, flies 20m in 0.48s, saw returns; bot soak 1738m/90s, 20s grinding, 4 throws, wheels turning on 1759 sampled frames, no saws leaked, no errors.
+(5) **THE RIDER SAT BACKWARDS.** The hero image was shot front-on, so the generated model's forward is +Z while the bike's is -Z — measured by taking the normal of his shoulder line, which came back [0,0,1]. `man.rotation.y = Math.PI`. Worth checking on ANY generated character: the view you generate him from becomes his facing.
+AUDIO: the throw cue is MECHANICAL, not vocal. A synthesised "evil laugh" was tried and binned — procedural vocal synthesis is the one thing WebAudio is genuinely bad at, and formant-filtered sawtooths read as a synth lead imitating a voice however the formants are tuned. `sfx.sawThrow()` is a band-passed noise whoosh sweeping up and out plus a chain whine falling in pitch as it spins away, which is the kind of sound this synth does well. A convincing laugh wants a real sample.
+Verified: throw deals 36.0 through 55 armor, flies 20m in 0.48s, saw returns; rider facing matches bike forward; bot soak 1738m/90s, 20s grinding, 4 throws, wheels turning on 1759 sampled frames, no saws leaked, no errors.
 
 Ideas: gamepad support, energy attacks (freeze), split-screen, dedicated server-sim (extract game.step from THREE/DOM), interpolation-delay auto-tuning from jitter.
 
