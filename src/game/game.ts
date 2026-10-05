@@ -10,6 +10,7 @@ import { buildCarMesh, makeContactShadow } from '../render/carMesh';
 import { buildRocket } from '../render/rocket';
 import { buildMine } from '../render/mine';
 import { buildNuke } from '../render/nuke';
+import { buildShield } from '../render/shield';
 import { Effects } from '../render/effects';
 import { Hud } from '../ui/hud';
 import { sfx } from '../audio/sfx';
@@ -142,6 +143,7 @@ interface Barrel {
 const _v1 = new THREE.Vector3();
 const _v2 = new THREE.Vector3();
 const _v3 = new THREE.Vector3();
+const _q1 = new THREE.Quaternion();
 
 let hexFieldTexture: THREE.CanvasTexture | null = null;
 
@@ -314,19 +316,10 @@ export class Game {
     v.loadout = loadout;
     // shield: hex-cell energy field hugging the car (mostly invisible —
     // the hex lattice reads on the rim, flares white when it eats a hit)
-    const bubble = new THREE.Mesh(
-      new THREE.SphereGeometry(spec.size.z * 1.55, 24, 16),
-      new THREE.MeshBasicMaterial({
-        map: makeHexFieldTexture(), color: 0x8fa5ff,
-        transparent: true, opacity: 0.16,
-        blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide,
-      }),
-    );
-    bubble.scale.y = 0.55;      // squashed dome — a field, not a floating ball
-    bubble.position.y = 0.15;
-    bubble.visible = false;
-    group.add(bubble);
-    v.shieldMesh = bubble;
+    const shield = buildShield(spec.size.z * 1.55, makeHexFieldTexture());
+    group.add(shield.mesh);
+    v.shieldMesh = shield.mesh;
+    v.shieldMat = shield.mat;
     this.scene.add(group);
     this.vehicles.push(v);
     this.colliderToVehicle.set(v.collider.handle, v);
@@ -1841,16 +1834,19 @@ export class Game {
       if (v.mesh && v.alive) {
         v.mesh.visible = v.spawnProtection > 0 ? Math.floor(this.time * 9) % 2 === 0 : true;
       }
-      if (v.shieldMesh) {
+      if (v.shieldMesh && v.shieldMat) {
         v.shieldMesh.visible = v.alive && v.shieldTime > 0;
         if (v.shieldMesh.visible) {
-          // steady faint lattice (no breathing blob), slow energy drift,
-          // white-hot flare on blocked hits, rapid flicker in the final 2s
-          v.shieldMesh.rotation.y += dt * 0.5;
-          (v.shieldMesh.material as THREE.MeshBasicMaterial).opacity =
-            0.15
-            + v.shieldFlash * 2.4
-            + (v.shieldTime < 2 ? 0.13 * Math.sin(this.time * 32) : 0);
+          const u = v.shieldMat.uniforms;
+          u.uTime.value = this.time;
+          u.uFlash.value = v.shieldFlash;
+          // the hit direction is stored in world space; the dome is a child of
+          // the car, so bring it into the car's frame or the flare rotates with
+          // the vehicle instead of staying where you were shot from
+          _v1.copy(v.shieldHitDir).applyQuaternion(_q1.copy(v.quaternion).invert());
+          u.uHitDir.value.copy(_v1);
+          // field destabilises over the last two seconds rather than just blinking
+          u.uStable.value = THREE.MathUtils.clamp(v.shieldTime / 2, 0, 1);
         }
       }
       if (v.alive && v.input.turbo && v.turboMeter > 0 && v.input.throttle > 0) {

@@ -40,36 +40,14 @@ export class Hud {
   private shieldRow = $('shield-row');
   private panic = $('panic');
   private popups = $('dmg-popups');
-  private shieldSegs: HTMLElement[] = [];
+  private shieldBar = $('shield-bar');
+  private shieldLabel = $('shield-label');
 
   constructor() {
     // Shield stays segmented — its 10 blocks ARE the 10 remaining seconds, so
     // counting them is the point. Armour is a continuous bar like turbo and
     // special: as a health value there is nothing to count, and the blocks just
     // made the busiest corner of the HUD noisier than the bars beside it.
-    this.shieldSegs = this.buildSegs($('shield-bar'), 10);
-  }
-
-  private buildSegs(container: HTMLElement, n: number): HTMLElement[] {
-    const fills: HTMLElement[] = [];
-    for (let i = 0; i < n; i++) {
-      const seg = document.createElement('div');
-      seg.className = 'seg';
-      const fill = document.createElement('div');
-      fill.className = 'fill';
-      seg.appendChild(fill);
-      container.appendChild(seg);
-      fills.push(fill);
-    }
-    return fills;
-  }
-
-  private fillSegs(fills: HTMLElement[], ratio: number) {
-    const n = fills.length;
-    for (let i = 0; i < n; i++) {
-      const segFill = THREE_clamp(ratio * n - i, 0, 1);
-      fills[i].style.width = `${segFill * 100}%`;
-    }
   }
 
   show() { $('hud').classList.remove('hidden'); }
@@ -84,11 +62,15 @@ export class Hud {
     const panicking = hpRatio < 0.3 && player.alive;
     this.healthBar.classList.toggle('critical', panicking);
     this.panic.classList.toggle('on', panicking);
-    // shield bar exists only while shielded (10s timer, one block per second);
+    // shield bar exists only while shielded. It used to be ten blocks, one per
+    // second — the blocks WERE the countdown. Now it is continuous like armour
+    // and turbo, so the seconds moved into the label where they are actually
+    // legible under pressure.
     // final 2 seconds blink the whole row as the expiry warning
     this.shieldRow.classList.toggle('hidden', player.shieldTime <= 0 || !player.alive);
     if (player.shieldTime > 0) {
-      this.fillSegs(this.shieldSegs, player.shieldTime / 10);
+      this.shieldBar.style.width = `${(player.shieldTime / 10) * 100}%`;
+      this.shieldLabel.textContent = `SHIELD — ${player.shieldTime.toFixed(1)}s`;
       this.shieldRow.classList.toggle('expiring', player.shieldTime < 2);
     }
     this.turboBar.style.width = `${(player.turboMeter / player.spec.turboMax) * 100}%`;
@@ -130,7 +112,8 @@ export class Hud {
 
     // status chips
     const chips: string[] = [];
-    if (player.shieldTime > 0) chips.push(`<span class="chip shield">SHIELD ${player.shieldTime.toFixed(0)}s</span>`);
+    // no shield chip: the shield has its own bar now and the countdown lives in
+    // its label, so a chip would print the same number twice
     if (player.overdriveTime > 0) chips.push(`<span class="chip overdrive">OVERDRIVE ${player.overdriveTime.toFixed(0)}s</span>`);
     if (player.spawnProtection > 0 && player.alive) chips.push(`<span class="chip protected">PROTECTED</span>`);
     this.statusChips.innerHTML = chips.join('');

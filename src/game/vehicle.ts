@@ -63,6 +63,11 @@ export class Vehicle {
   nukes = 0;
   nukeCooldown = 0;
   shieldMesh: THREE.Mesh | null = null;
+  /** material of the shield field — its uniforms are driven in Game.render */
+  shieldMat: THREE.ShaderMaterial | null = null;
+  /** world-space direction the last blocked hit came from, so the field can
+   *  flare where it landed instead of all over */
+  shieldHitDir = new THREE.Vector3(0, 1, 0);
   /** flare timer — the bubble flashes when it eats a hit */
   shieldFlash = 0;
 
@@ -405,7 +410,7 @@ export class Vehicle {
     this.mineCooldown = Math.max(0, this.mineCooldown - dt);
     this.spawnProtection = Math.max(0, this.spawnProtection - dt);
     this.shieldTime = Math.max(0, this.shieldTime - dt);
-    this.shieldFlash = Math.max(0, this.shieldFlash - dt);
+    this.shieldFlash = Math.max(0, this.shieldFlash - dt * 3.2);
     this.overdriveTime = Math.max(0, this.overdriveTime - dt);
     this.specialActiveTime = Math.max(0, this.specialActiveTime - dt);
     this.specialWindow = Math.max(0, this.specialWindow - dt);
@@ -443,7 +448,13 @@ export class Vehicle {
    */
   takeDamage(amount: number, attacker: Vehicle | null, now: number, pierce = false): boolean {
     if (!this.alive || this.spawnProtection > 0) return false;
-    if (this.shieldTime > 0) { this.shieldFlash = 0.18; return false; } // shield = untouchable, flare on impact
+    if (this.shieldTime > 0) {
+      this.shieldFlash = 1;
+      // flare where the shot actually came from; straight up if we can't tell
+      if (attacker) this.shieldHitDir.copy(attacker.position).sub(this.position).normalize();
+      else this.shieldHitDir.set(0, 1, 0);
+      return false;   // shield = untouchable
+    }
     // armor mitigation: percentage reduction with diminishing returns.
     // effectiveHP = 100 * (1 + armor/100); armor never zeroes out chip damage.
     if (!pierce) amount *= 100 / (100 + this.spec.armor);

@@ -111,20 +111,6 @@ html, body {
   50% { filter: brightness(1.7) saturate(1.4); }
 }
 
-/* segmented bars — count your blocks at a glance */
-.bar-outer.segs { background: transparent; border: none; height: 16px; }
-.bar-segs { display: flex; gap: 3px; height: 100%; width: 100%; }
-.bar-segs .seg {
-  flex: 1; height: 100%;
-  background: rgba(255, 255, 255, 0.10);
-  border: 1px solid rgba(255, 255, 255, 0.22);
-  overflow: hidden;
-}
-.bar-segs .seg .fill {
-  height: 100%; width: 100%;
-  background: linear-gradient(90deg, #ff3b00, #ffb300);
-  transition: width 0.1s linear;
-}
 #shield-row { margin-bottom: 2px; }
 #shield-row.expiring { animation: shieldExpire 0.3s infinite alternate; }
 @keyframes shieldExpire {
@@ -132,8 +118,8 @@ html, body {
   to { opacity: 0.45; filter: hue-rotate(90deg) brightness(1.4); }
 }
 .bar-label.shield-label { color: #8fa5ff; }
-.bar-outer.segs.shield { height: 10px; width: 85%; }
-#shield-bar .seg .fill { background: linear-gradient(90deg, #2b3fcc, #7de8ff); }
+.bar-outer.shield { height: 10px; width: 85%; }
+.bar-inner.shield { background: linear-gradient(90deg, #2b3fcc, #7de8ff); }
 
 /* panic state: pulsing red screen edges below 30% armor */
 #panic {
