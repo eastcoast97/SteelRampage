@@ -97,10 +97,11 @@ const SAW_WHEELIE_ANGLE = 0.46;    // ~26 degrees of nose-up while grinding
 // that put it where it belongs. Measured tip, relative to the bike:
 // slung diagonally across his back like a strap: tip high over his right
 // shoulder, handle low by his left hip
-const SAW_REST: [number, number, number] = [-0.54, -2.62, 0.9];
-const SAW_GRIND: [number, number, number] = [-0.36, 0.50, 0.3];    // ON THE TARMAC, 1.2m out to his left
-const SAW_RAISE: [number, number, number] = [1.55, -1.12, 0.6];    // up over the shoulder, y 2.41
-const SAW_STRIKE: [number, number, number] = [-0.24, -0.22, 0];    // buried in the road 1.6m AHEAD, centred
+const SAW_REST: [number, number, number] = [-0.86, -2.40, 0.9];    // slung back over his shoulder
+// +SAW_WHEELIE_ANGLE baked in, because the render pass subtracts it again
+const SAW_GRIND: [number, number, number] = [1.84, 2.78, 0.9];     // tip ON the tarmac, 0.8m to his left
+const SAW_RAISE: [number, number, number] = [-2.40, -2.68, -0.9];  // up over the shoulder, 2.2m
+const SAW_STRIKE: [number, number, number] = [2.64, -2.96, -0.9];  // chopped down out front
 const FLAME_DPS = 20;
 const TURRET_SHOT = 2.0;
 const MINIGUN_SHOT = 3.5;

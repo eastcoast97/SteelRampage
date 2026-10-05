@@ -25,18 +25,24 @@ const MODEL_YAW: Partial<Record<CarSpec['build'], number>> = {
   tank: -Math.PI / 2,
   hearse: -Math.PI / 2,
   ambulance: -Math.PI / 2,
+  // the bike came back with its length already on Z, so no correction
 };
 
 /** Builds whose GLB ships its own authored PBR textures (AI-generated or
  *  hand-authored). Their materials must be left ALONE — no palette retint, no
  *  shared scratch roughness map, or we'd paint over the real maps. */
 export const AUTHORED_TEXTURES = new Set<CarSpec['build']>([
-  'speed', 'muscle', 'sports', 'suv', 'tank', 'hearse', 'ambulance',
+  'speed', 'muscle', 'sports', 'suv', 'tank', 'hearse', 'ambulance', 'bike',
 ]);
 /** Builds whose GLB already contains wheels, so the steer/spin rig must not
  *  mount a second set on top. (The AI muscle body had its wheels boolean-cut
  *  out in Blender — see tools/blender/cut_wheels.py — so it is NOT in here.) */
 export const WHEELS_BAKED_IN = new Set<CarSpec['build']>([]);
+
+/** REAPER's chainsaw, generated separately so it can still be posed: the body
+ *  mesh is a single fused shell, so anything modelled INTO it is frozen. */
+let sawModel: THREE.Group | null = null;
+export function getSawModel(): THREE.Group | null { return sawModel; }
 
 /** Yaw correction for wheel models, same reason as MODEL_YAW: the rig expects
  *  the axle along X, and an AI wheel generated from a face-on image comes out
@@ -59,6 +65,7 @@ const BODY_FILES: Partial<Record<CarSpec['build'], string>> = {
   tank: 'juggernaut-ai',
   hearse: 'mortis-ai',
   ambulance: 'medic-ai',
+  bike: 'reaper-ai',       // chopper + rider, generated as one piece
 };
 
 // the AI spiked armored wheel is generic enough to serve the whole fleet
@@ -70,6 +77,10 @@ const WHEEL_FILES: Partial<Record<CarSpec['build'], string>> = {
   tank: 'hellcat-wheel',
   hearse: 'hellcat-wheel',
   ambulance: 'hellcat-wheel',
+  // REAPER draws its own two wheels (render/reaper.ts), but the library only
+  // registers a build that ALSO resolves a wheel model — without this entry the
+  // bike body is silently dropped and the vehicle renders as bare wheels
+  bike: 'hellcat-wheel',
 };
 
 let library: Map<string, CarModel> | null = null;
@@ -186,7 +197,7 @@ export async function loadCarModels(): Promise<void> {
   try {
     const builds = Object.keys(BODY_FILES) as CarSpec['build'][];
     const wheelNames = [...new Set(Object.values(WHEEL_FILES))] as string[];
-    const [bodies, wheels, bldg, arena, docks] = await Promise.all([
+    const [bodies, wheels, bldg, arena, docks, saw] = await Promise.all([
       // per-body catch: one missing/!corrupt body degrades that single build to
       // the procedural mesh instead of taking the whole library down
       Promise.all(builds.map((b) => load(BODY_FILES[b]!).catch(() => null))),
@@ -196,10 +207,12 @@ export async function loadCarModels(): Promise<void> {
       load('arena-building').catch(() => null),
       load('arena').catch(() => null),
       load('arena-docks').catch(() => null),
+      load('reaper-saw').catch(() => null),
     ]);
     arenaBuilding = bldg;
     arenaScenes[0] = arena;
     arenaScenes[1] = docks;
+    sawModel = saw;
     const wheelByName = new Map<string, THREE.Group>();
     wheelNames.forEach((n, i) => {
       const w = wheels[i];
