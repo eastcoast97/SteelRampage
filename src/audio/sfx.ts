@@ -41,9 +41,10 @@ class Sfx {
   private ctx: AudioContext | null = null;
   private master: GainNode | null = null;
   // the grind is one continuous source whose level is steered (see sawGrind)
-  private grindSrc: AudioBufferSourceNode | null = null;
   private grindGain: GainNode | null = null;
-  private grindFilter: BiquadFilterNode | null = null;
+  private grindFund: OscillatorNode | null = null;
+  private grindRasp: OscillatorNode | null = null;
+  private grindLfo: OscillatorNode | null = null;
   private noiseBuf: AudioBuffer | null = null;
   // continuous road voices, started once and driven by gain/filter from then on
   private windGain: GainNode | null = null;
@@ -394,55 +395,121 @@ class Sfx {
   }
 
   /**
-   * REAPER's blade on the tarmac — a SUSTAINED grind, so it is one long-lived
-   * noise source whose level is steered, not a sound re-triggered per frame.
-   * Re-triggering would machine-gun the attack envelope and sound like a drum
-   * roll instead of a drag.
+   * REAPER's saw running — an actual two-stroke, not a scrape.
+   *
+   * The first version was band-passed noise, which is what steel-on-stone
+   * sounds like but not what a chainsaw sounds like. A chainsaw is an ENGINE:
+   * a buzzy sawtooth at the firing rate with a hard warble on top of it, and
+   * the chain noise is the garnish rather than the sound itself.
+   *
+   * One long-lived voice whose level and pitch are steered, never re-triggered
+   * per frame — re-triggering machine-guns the attack envelope and comes out as
+   * a drum roll.
    */
   sawGrind(intensity: number) {
     if (!this.ctx || !this.master) return;
-    if (!this.grindSrc) {
+    if (!this.grindGain) {
+      const out = this.ctx.createGain();
+      out.gain.value = 0;
+      // engine body: a lowpass keeps the sawtooth from sounding like a buzzer
+      const tone = this.ctx.createBiquadFilter();
+      tone.type = 'lowpass';
+      tone.frequency.value = 2300;
+      tone.Q.value = 0.8;
+      tone.connect(out).connect(this.master);
+
+      const fund = this.ctx.createOscillator();
+      fund.type = 'sawtooth';
+      fund.frequency.value = 110;
+      const fundG = this.ctx.createGain(); fundG.gain.value = 0.55;
+      fund.connect(fundG).connect(tone);
+
+      // detuned square an octave up = the ragged two-stroke rasp
+      const rasp = this.ctx.createOscillator();
+      rasp.type = 'square';
+      rasp.frequency.value = 221;
+      const raspG = this.ctx.createGain(); raspG.gain.value = 0.18;
+      rasp.connect(raspG).connect(tone);
+
+      // chain: a thin band of noise riding on top
       const len = Math.floor(this.ctx.sampleRate * 2);
       const buf = this.ctx.createBuffer(1, len, this.ctx.sampleRate);
       const d = buf.getChannelData(0);
       for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
-      const src = this.ctx.createBufferSource();
-      src.buffer = buf;
-      src.loop = true;
-      // band-passed noise reads as metal on stone; a raw hiss reads as rain
-      const bp = this.ctx.createBiquadFilter();
-      bp.type = 'bandpass';
-      bp.frequency.value = 2400;
-      bp.Q.value = 1.1;
-      const gain = this.ctx.createGain();
-      gain.gain.value = 0;
-      src.connect(bp).connect(gain).connect(this.master);
-      src.start();
-      this.grindSrc = src;
-      this.grindGain = gain;
-      this.grindFilter = bp;
+      const noise = this.ctx.createBufferSource();
+      noise.buffer = buf; noise.loop = true;
+      const chain = this.ctx.createBiquadFilter();
+      chain.type = 'bandpass'; chain.frequency.value = 3200; chain.Q.value = 1.4;
+      const chainG = this.ctx.createGain(); chainG.gain.value = 0.22;
+      noise.connect(chain).connect(chainG).connect(tone);
+
+      // THE WARBLE — this is the part that makes it read as a chainsaw rather
+      // than a wasp. Amplitude modulation at a fraction of the firing rate.
+      const lfo = this.ctx.createOscillator();
+      lfo.type = 'sine'; lfo.frequency.value = 26;
+      const lfoG = this.ctx.createGain(); lfoG.gain.value = 0.42;
+      lfo.connect(lfoG).connect(out.gain);
+
+      fund.start(); rasp.start(); noise.start(); lfo.start();
+      this.grindGain = out;
+      this.grindFund = fund;
+      this.grindRasp = rasp;
+      this.grindLfo = lfo;
     }
     const t = this.ctx.currentTime;
-    this.grindGain!.gain.setTargetAtTime(0.1 * intensity, t, 0.05);
-    this.grindFilter!.frequency.setTargetAtTime(1700 + intensity * 1900, t, 0.08);
+    // revs up as the blade bites harder
+    const f = 95 + intensity * 85;
+    this.grindFund!.frequency.setTargetAtTime(f, t, 0.08);
+    this.grindRasp!.frequency.setTargetAtTime(f * 2.01, t, 0.08);
+    this.grindLfo!.frequency.setTargetAtTime(20 + intensity * 16, t, 0.1);
+    // measured against the engine floor: 0.13 left the saw quieter than the
+    // bike it is mounted on, which is not what a chainsaw at your feet does
+    this.grindGain!.gain.setTargetAtTime(0.32 * intensity, t, 0.05);
   }
 
-  /** the saw landing: a metal shriek over a body hit */
-  sawSlam(vol = 1) {
+  /**
+   * The release: an evil clown laugh.
+   *
+   * Procedural like everything else here — a descending run of short vowel
+   * bursts. What sells it as a laugh rather than a siren is that each syllable
+   * bends DOWN in pitch across its own length and the run as a whole descends,
+   * and what sells it as nasty is the detuned second voice a semitone off.
+   */
+  sawLaugh(vol = 1) {
     if (!this.ctx || !this.master) return;
-    const t = this.ctx.currentTime;
-    const o = this.ctx.createOscillator();
-    o.type = 'sawtooth';
-    o.frequency.setValueAtTime(900, t);
-    o.frequency.exponentialRampToValueAtTime(140, t + 0.28);
-    const g = this.ctx.createGain();
-    g.gain.setValueAtTime(0.0001, t);
-    g.gain.exponentialRampToValueAtTime(0.3 * vol, t + 0.01);
-    g.gain.exponentialRampToValueAtTime(0.001, t + 0.34);
-    o.connect(g).connect(this.master);
-    o.start(t);
-    o.stop(t + 0.36);
-    this.thud(vol * 0.9);
+    const t0 = this.ctx.currentTime;
+    const syllables = 6;
+    for (let i = 0; i < syllables; i++) {
+      const at = t0 + i * 0.115;
+      const base = 330 * Math.pow(0.9, i);          // the run falls away
+      // levels are high because the formant bandpasses throw most of the saw
+      // away — measured, not guessed
+      for (const [mult, level] of [[1, 1.3], [1.06, 0.8]] as const) {
+        const o = this.ctx.createOscillator();
+        o.type = 'sawtooth';
+        o.frequency.setValueAtTime(base * mult * 1.12, at);
+        o.frequency.exponentialRampToValueAtTime(base * mult * 0.82, at + 0.1);
+        const g = this.ctx.createGain();
+        g.gain.setValueAtTime(0.0001, at);
+        g.gain.exponentialRampToValueAtTime(level * vol, at + 0.012);
+        g.gain.exponentialRampToValueAtTime(0.0001, at + 0.1);
+        // Two formants, in PARALLEL. In series they measured QUIETER than the
+        // engine idle — cascading two narrow bandpasses leaves almost nothing,
+        // and parallel is how a vowel is actually built anyway.
+        for (const [hz, q, amt] of [[760, 4, 1], [1180, 5, 0.6]] as const) {
+          const f = this.ctx.createBiquadFilter();
+          f.type = 'bandpass'; f.frequency.value = hz; f.Q.value = q;
+          const fg = this.ctx.createGain(); fg.gain.value = amt;
+          o.connect(f).connect(fg).connect(g);
+        }
+        // a little dry signal keeps the body, so it reads as a voice not a filter
+        const dry = this.ctx.createGain(); dry.gain.value = 0.25;
+        o.connect(dry).connect(g);
+        g.connect(this.master);
+        o.start(at);
+        o.stop(at + 0.12);
+      }
+    }
   }
 
   /** heavy low thud — wall crashes and hard landings */

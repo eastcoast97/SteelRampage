@@ -238,6 +238,9 @@ async function boot() {
   composer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
   // debug/tuning handle: toggle passes and tweak grade uniforms live
   (window as any).__fx = { composer, gtaoPass, bloomPass, gradePass, speedPass, renderPass };
+  // audio is otherwise untestable from the console: a dynamic import() of the
+  // sfx module under Vite hands back a SEPARATE instance with no AudioContext
+  (window as any).__sfx = sfx;
 
   // --- reflection environment: real PBR reflections on metal + car paint ---
   const pmrem = new THREE.PMREMGenerator(renderer);

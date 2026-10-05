@@ -1140,7 +1140,8 @@ export class Game {
       this.netEvents.push({ k: 'saw', x: +reach.x.toFixed(1), y: +reach.y.toFixed(1), z: +reach.z.toFixed(1) });
     }
     this.effects.sawSlam(reach, fwd);
-    sfx.sawSlam(THREE.MathUtils.clamp(1.4 - reach.distanceTo(this.player.position) / 60, 0.2, 1.2));
+    // the release is the laugh; the explosion below only fires if it CONNECTS
+    sfx.sawLaugh(THREE.MathUtils.clamp(1.4 - reach.distanceTo(this.player.position) / 60, 0.2, 1.2));
     this.effects.trauma = Math.min(1, this.effects.trauma + 0.5);
 
     // a short wide arc in front, not a radius around the bike — you have to be
@@ -1165,6 +1166,7 @@ export class Game {
     const imp = 7 * best.body.mass();
     best.body.applyImpulse({ x: _v1.x * imp, y: _v1.y * imp, z: _v1.z * imp }, true);
     this.effects.sparks(best.position, 26, 0xffb060);
+    sfx.explosion(THREE.MathUtils.clamp(1.3 - best.position.distanceTo(this.player.position) / 60, 0.25, 1.1));
     if (best === this.player) this.hud.showDamage(0.6);
     if (v === this.player) this.hud.showHitmarker();
     if (killed) this.onKill(v, best);

@@ -301,7 +301,7 @@ export class GuestSync {
       } else if (e.k === 'saw') {
         const at = new THREE.Vector3(e.x, e.y, e.z);
         g.effects.sawSlam(at, new THREE.Vector3(0, 0, -1));
-        sfx.sawSlam(Math.max(0.2, Math.min(1.2, 1.4 - at.distanceTo(me.position) / 60)));
+        sfx.sawLaugh(Math.max(0.2, Math.min(1.2, 1.4 - at.distanceTo(me.position) / 60)));
       } else if (e.k === 'kill') {
         g.hud.addKillFeed(e.a, e.v);
       } else if (e.k === 'ann') {
