@@ -48,7 +48,7 @@ TOWN = os.path.join(MODELS, "arena.glb")
 DOCKS = os.path.join(MODELS, "arena-docks.glb")
 
 # must match PICKUP_TYPE_ORDER in src/game/pickups.ts
-PICKUP_TYPES = {"missiles", "health", "turbo", "mines", "special", "shield", "overdrive"}
+PICKUP_TYPES = {"missiles", "health", "turbo", "mines", "special", "shield", "overdrive", "nuke"}
 
 MARKER_PREFIXES = ("SPAWN_", "PICKUP_", "BARREL_", "PUMP_")
 RECT_PREFIXES = ("BOOST_", "PED_")

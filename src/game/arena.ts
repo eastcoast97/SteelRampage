@@ -991,7 +991,10 @@ function dedicateNukeSocket(points: ArenaData['pickupPoints']) {
 
   const alts = chosen.map((c) => c.pos.clone());
   for (const c of chosen) points.splice(points.indexOf(c), 1);
-  points.push({ pos: alts[0].clone(), type: 'nuke', alts });
+  // random START too — seeding it at alts[0] meant every match opened with the
+  // nuke in the same corner, so the first one was never a question
+  const first = alts[Math.floor(Math.random() * alts.length)];
+  points.push({ pos: first.clone(), type: 'nuke', alts });
 }
 
 /** Ground clutter for whichever arena we ended up building. Called last so the

@@ -346,14 +346,11 @@ export class PickupManager {
       if (!p.active) {
         p.timer -= dt;
         p.beacon.group.visible = false;
-        if (p.bolt) {
-          // the bolt stays up while the nuke respawns, dimmed and charging —
-          // hiding it would hide the one landmark telling you where to be when
-          // it comes back, which is most of its value
-          p.bolt.group.visible = true;
-          p.bolt.mat.uniforms.uTime.value = this.time;
-          p.bolt.mat.uniforms.uFade.value = 0.14;
-        }
+        // the bolt means "there is a nuke here right now". Leaving it up while
+        // the socket is empty sends people across the map for nothing — and
+        // since the socket moves on every respawn it would be pointing at the
+        // wrong place anyway.
+        if (p.bolt) p.bolt.group.visible = false;
         // socket ring brightens as respawn approaches
         p.ringMat.opacity = 0.08 + 0.25 * (1 - Math.min(1, p.timer / RESPAWN_TIME[p.type]));
         if (p.timer <= 0) {
@@ -365,7 +362,12 @@ export class PickupManager {
           if (camped) continue;
           // roaming pickups relocate on each respawn
           if (p.alts && p.alts.length > 1) {
-            const next = p.alts[Math.floor(Math.random() * p.alts.length)];
+            // pick from the sockets it is NOT currently on, so it always moves —
+            // a uniform pick repeats the same spot 1 time in 3 and the item stops
+            // feeling like it roams at all
+            const away = p.alts.filter((a) => a.distanceToSquared(p.pos) > 1);
+            const pool = away.length ? away : p.alts;
+            const next = pool[Math.floor(Math.random() * pool.length)];
             p.pos.copy(next);
             p.mesh.position.copy(next);
             p.ring.position.set(next.x, next.y - 0.75, next.z);
@@ -383,6 +385,10 @@ export class PickupManager {
           p.popT = 0.15;
           p.ringMat.opacity = 0.4;
           p.beacon.group.visible = true;
+          // light the bolt on the same frame the socket restocks — the active
+          // path below does not run until the next tick, which left a one-frame
+          // hole where the nuke was there but unmarked
+          if (p.bolt) p.bolt.group.visible = true;
         }
         continue;
       }
@@ -425,6 +431,8 @@ export class PickupManager {
           if (p.type === 'special' && v.specialEnergy >= 1) continue;
           if (p.type === 'nuke' && v.nukes >= MAX_NUKES) continue;
           p.active = false;
+          // kill the bolt on the same frame it is taken, not on the next tick
+          if (p.bolt) p.bolt.group.visible = false;
           // ±30% jitter so respawn timers can't be memorized and camped
           p.timer = RESPAWN_TIME[p.type] * (0.7 + Math.random() * 0.6);
           p.shrinkT = 0.16; // flare-and-go, see the branch above
