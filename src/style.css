@@ -172,9 +172,12 @@ html, body {
 .chip.protected { border-left: 3px solid #3aff6e; color: #b8ffce; }
 #radar {
   display: block; margin-left: auto;
-  background: rgba(8, 12, 10, 0.65);
+  /* backing-store is 2x the CSS size so the map stays crisp on any display */
+  width: 158px; height: 158px;
+  background: rgba(6, 10, 14, 0.72);
   border-radius: 50%;
-  border: 2px solid rgba(120, 255, 170, 0.35);
+  border: 1px solid rgba(150, 230, 255, 0.28);
+  box-shadow: 0 0 0 4px rgba(6, 10, 14, 0.45), 0 4px 18px rgba(0, 0, 0, 0.55);
 }
 
 #toasts {

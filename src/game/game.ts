@@ -68,6 +68,9 @@ const SPECIAL_RETRIGGER: Record<string, number> = {
 };
 const RAM_CAP = 18;
 const SLAM_DAMAGE = 22;
+// the ring the player SEES is drawn to this too (effects.shockwave) — the reach
+// and the visual used to be separate literals and could drift apart
+const SLAM_RADIUS = 12.1;
 const FLAME_DPS = 20;
 const TURRET_SHOT = 2.0;
 const MINIGUN_SHOT = 3.5;
@@ -1121,13 +1124,13 @@ export class Game {
     if (this.netOpts?.role === 'host') {
       this.netEvents.push({ k: 'slam', x: +at.x.toFixed(1), y: +at.y.toFixed(1), z: +at.z.toFixed(1) });
     }
-    this.effects.shockwave(at);
+    this.effects.shockwave(at, SLAM_RADIUS);
     sfx.explosion(THREE.MathUtils.clamp(1.5 - at.distanceTo(this.player.position) / 70, 0.3, 1.2));
     for (const e of this.vehicles) {
       if (e === v || !e.alive) continue;
       const d = e.position.distanceTo(at);
-      if (d > 11) continue;
-      const falloff = 1 - (d / 11) * 0.6;
+      if (d > SLAM_RADIUS) continue;
+      const falloff = 1 - (d / SLAM_RADIUS) * 0.6;
       const dmg = this.drawSpecialBudget(v, e, SLAM_DAMAGE * falloff);
       const killed = dmg > 0 && e.takeDamage(dmg, v, this.time);
       _v1.copy(e.position).sub(at).normalize();

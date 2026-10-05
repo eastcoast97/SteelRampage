@@ -1,10 +1,22 @@
 import type { Vehicle } from '../game/vehicle';
 import type { Game } from '../game/game';
 import { MODES } from '../game/game';
-import { STREETS, ARCS, ROUNDABOUT, STREETS_DOCKS } from '../game/arena';
+import { STREETS, ARCS, ROUNDABOUT, STREETS_DOCKS, ARENA_HALF } from '../game/arena';
 import { MAX_MISSILES, MAX_MINES, MAX_NUKES } from '../game/specs';
 
 const $ = (id: string) => document.getElementById(id)!;
+
+/**
+ * Radar half-width in metres. Used by BOTH the underlay and the live draw, so
+ * they cannot drift apart.
+ *
+ * It used to be 160 — the arena's own half-width, i.e. the whole map squeezed
+ * into 150px. That is a map, not a radar: everything you actually need to react
+ * to sat in a few pixels around the centre. 95m is roughly "who can shoot me in
+ * the next few seconds", and anything further is clamped to the rim instead of
+ * being dropped.
+ */
+const RADAR_RANGE = 95;
 const THREE_clamp = (v: number, a: number, b: number) => Math.max(a, Math.min(b, v));
 
 export class Hud {
@@ -185,53 +197,73 @@ export class Hud {
     this.drawRadar(player, vehicles, game);
   }
 
-  /** static street-layout underlay, drawn once (mirrors arena.ts geometry) */
+  /**
+   * Static street-layout underlay, drawn once per arena.
+   *
+   * Sized from RADAR_RANGE rather than a hardcoded 160 so the scale can never
+   * drift from drawRadar's — that drift used to be a standing hazard with a
+   * comment warning about it, which is not the same as preventing it.
+   */
   private buildRadarMap(arenaIdx = 0): HTMLCanvasElement {
-    // drawn from the arena's own street data so the radar can never drift
-    const S = this.radar.width;
-    const s = (S / 2) / 160;                 // world meters → map px
+    const s = (this.radar.width / 2) / RADAR_RANGE;      // world metres → map px
+    const SPAN = ARENA_HALF * 2;
+    const S = Math.ceil(SPAN * s);
     const c = document.createElement('canvas');
     c.width = c.height = S;
     const g = c.getContext('2d')!;
     const px = (w: number) => w * s + S / 2;
-    g.strokeStyle = 'rgba(255,255,255,0.15)';
-    g.lineCap = 'round';
-    // streets
-    for (const [x0, z0, x1, z1, w] of (arenaIdx === 1 ? STREETS_DOCKS : STREETS)) {
-      g.lineWidth = w * s;
-      g.beginPath();
-      g.moveTo(px(x0), px(z0));
-      g.lineTo(px(x1), px(z1));
-      g.stroke();
+
+    // ground wash, so streets read as cut INTO something rather than floating
+    g.fillStyle = 'rgba(26, 32, 40, 0.55)';
+    g.fillRect(0, 0, S, S);
+
+    const streets = arenaIdx === 1 ? STREETS_DOCKS : STREETS;
+    // two passes: a dark casing under a lighter fill is what makes a road legible
+    // at this size — a single flat stroke mushes together at junctions
+    for (const pass of [
+      { col: 'rgba(10, 14, 20, 0.85)', pad: 2.5 },
+      { col: 'rgba(150, 170, 190, 0.5)', pad: 0 },
+    ]) {
+      g.strokeStyle = pass.col;
+      g.lineCap = 'round';
+      for (const [x0, z0, x1, z1, w] of streets) {
+        g.lineWidth = w * s + pass.pad;
+        g.beginPath();
+        g.moveTo(px(x0), px(z0));
+        g.lineTo(px(x1), px(z1));
+        g.stroke();
+      }
+      if (arenaIdx !== 1) {
+        for (const [cx, cz, r, th0, thLen, w] of ARCS) {
+          g.lineWidth = w * s + pass.pad;
+          g.beginPath();
+          g.arc(px(cx), px(cz), r * s, th0, th0 + thLen);
+          g.stroke();
+        }
+        g.lineWidth = ROUNDABOUT.w * s + pass.pad;
+        g.beginPath();
+        g.arc(px(0), px(0), ROUNDABOUT.r * s, 0, Math.PI * 2);
+        g.stroke();
+      }
     }
+
     if (arenaIdx === 1) {
-      // docks: water band east + the two drive-through warehouses in cyan
-      g.fillStyle = 'rgba(40,90,160,0.35)';
-      g.fillRect(px(140), px(-160), 20 * s, 320 * s);
-      g.strokeStyle = 'rgba(80,200,255,0.45)';
-      g.lineWidth = 3;
+      g.fillStyle = 'rgba(32, 86, 150, 0.5)';
+      g.fillRect(px(140), px(-ARENA_HALF), 20 * s, ARENA_HALF * 2 * s);
+      g.strokeStyle = 'rgba(90, 210, 255, 0.55)';
+      g.lineWidth = 2;
       g.strokeRect(px(32), px(-75), 24 * s, 60 * s);
       g.strokeRect(px(32), px(15), 24 * s, 60 * s);
       return c;
     }
-    // perimeter corner arcs
-    for (const [cx, cz, r, th0, thLen, w] of ARCS) {
-      g.lineWidth = w * s;
-      g.beginPath();
-      g.arc(px(cx), px(cz), r * s, th0, th0 + thLen);
-      g.stroke();
-    }
-    // roundabout + island
-    g.lineWidth = ROUNDABOUT.w * s;
-    g.beginPath();
-    g.arc(px(0), px(0), ROUNDABOUT.r * s, 0, Math.PI * 2);
-    g.stroke();
-    g.fillStyle = 'rgba(220,190,130,0.35)';
+
+    // roundabout island
+    g.fillStyle = 'rgba(214, 180, 120, 0.4)';
     g.beginPath();
     g.arc(px(0), px(0), ROUNDABOUT.islandR * s, 0, Math.PI * 2);
     g.fill();
-    // diagonal tunnels — cyan like their neon
-    g.strokeStyle = 'rgba(80,200,255,0.45)';
+    // diagonal tunnels — cyan, matching their neon
+    g.strokeStyle = 'rgba(90, 210, 255, 0.5)';
     g.lineWidth = 14 * s;
     for (const d of [1, -1]) {
       g.beginPath();
@@ -239,109 +271,19 @@ export class Hud {
       g.lineTo(px(d * 63), px(-d * 63));
       g.stroke();
     }
-    // skyway (elevated track) — theme orange
-    g.strokeStyle = 'rgba(255,130,40,0.5)';
-    g.lineWidth = 10 * s;
+    // skyway — orange, and dashed because it is ABOVE you, not a road you can
+    // turn onto from here
+    g.strokeStyle = 'rgba(255, 140, 50, 0.65)';
+    g.lineWidth = 9 * s;
+    g.setLineDash([10, 7]);
     g.beginPath();
     g.moveTo(px(-90), px(120));
     g.lineTo(px(90), px(120));
     g.stroke();
+    g.setLineDash([]);
     return c;
   }
 
-  private drawRadar(player: Vehicle, vehicles: Vehicle[], game: Game) {
-    const ctx = this.radarCtx;
-    const S = this.radar.width;
-    const C = S / 2;
-    const RANGE = 160;   // MUST match buildRadarMap's scale or the underlay drifts
-    ctx.clearRect(0, 0, S, S);
-
-    const pPos = player.position;
-    const fwd = player.forward;
-    const heading = Math.atan2(-fwd.x, -fwd.z);
-    const cos = Math.cos(-heading), sin = Math.sin(-heading);
-
-    // street-layout underlay, rotated into the player's frame (per-arena cache)
-    const arenaIdx = (game as any).arenaIdx ?? 0;
-    if (!this.radarMap || this.radarArenaIdx !== arenaIdx) {
-      this.radarMap = this.buildRadarMap(arenaIdx);
-      this.radarArenaIdx = arenaIdx;
-    }
-    const s = C / RANGE;
-    ctx.save();
-    ctx.beginPath();
-    ctx.arc(C, C, S * 0.47, 0, Math.PI * 2);
-    ctx.clip();
-    ctx.translate(C, C);
-    ctx.transform(cos, sin, -sin, cos, 0, 0);
-    ctx.globalAlpha = 0.6;
-    ctx.drawImage(this.radarMap, -(pPos.x * s + C), -(pPos.z * s + C));
-    ctx.restore();
-
-    ctx.strokeStyle = 'rgba(120,255,170,0.25)';
-    ctx.beginPath(); ctx.arc(C, C, S * 0.32, 0, Math.PI * 2); ctx.stroke();
-
-    // high-value pickups (only while spawned in)
-    const PICKUP_DOTS: Record<string, string> = { missiles: '#ff8a3a', overdrive: '#ff44dd', shield: '#7d95ff', nuke: '#aaff00' };
-    for (const pk of (game.pickups as any)['pickups']) {
-      if (!pk.active || !PICKUP_DOTS[pk.type]) continue;
-      const dx = pk.pos.x - pPos.x;
-      const dz = pk.pos.z - pPos.z;
-      const rx = dx * cos - dz * sin;
-      const rz = dx * sin + dz * cos;
-      const gx = C + (rx / RANGE) * C;
-      const gy = C + (rz / RANGE) * C;
-      if (gx < 6 || gx > S - 6 || gy < 6 || gy > S - 6) continue;
-      ctx.fillStyle = PICKUP_DOTS[pk.type];
-      ctx.fillRect(gx - 1.5, gy - 1.5, 3, 3);
-    }
-
-    for (const v of vehicles) {
-      if (v === player || !v.alive) continue;
-      const dx = v.position.x - pPos.x;
-      const dz = v.position.z - pPos.z;
-      const rx = dx * cos - dz * sin;
-      const rz = dx * sin + dz * cos;
-      const px = C + (rx / RANGE) * C;
-      const py = C + (rz / RANGE) * C;
-      if (px < 4 || px > S - 4 || py < 4 || py > S - 4) continue;
-      ctx.fillStyle = v === player.lockTarget ? '#ff3355' : '#ff9944';
-      ctx.beginPath();
-      ctx.arc(px, py, 4, 0, Math.PI * 2);
-      ctx.fill();
-      // gold bounty ring — the marked leader is visible map-wide
-      if (v === (game as any).bountyTarget) {
-        ctx.strokeStyle = '#ffd24a';
-        ctx.lineWidth = 2;
-        ctx.beginPath();
-        ctx.arc(px, py, 7, 0, Math.PI * 2);
-        ctx.stroke();
-      }
-    }
-
-    // sudden-death ring: red circle centred on the town square (world origin)
-    const sdR = (game as any).suddenDeathR;
-    if (sdR !== Infinity && sdR !== undefined) {
-      const s2 = C / RANGE;
-      const rx = (0 - pPos.x) * cos - (0 - pPos.z) * sin;
-      const rz = (0 - pPos.x) * sin + (0 - pPos.z) * cos;
-      ctx.strokeStyle = 'rgba(255,60,40,0.8)';
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.arc(C + rx * s2, C + rz * s2, sdR * s2, 0, Math.PI * 2);
-      ctx.stroke();
-    }
-
-    ctx.fillStyle = '#7dffb0';
-    ctx.beginPath();
-    ctx.moveTo(C, C - 7);
-    ctx.lineTo(C - 5, C + 5);
-    ctx.lineTo(C + 5, C + 5);
-    ctx.closePath();
-    ctx.fill();
-  }
-
-  /** floating damage number at a projected screen position (self-animating) */
   popDamage(xPct: number, yPct: number, text: string, color: string) {
     const el = document.createElement('div');
     el.className = 'dmg-pop';
@@ -352,6 +294,155 @@ export class Hud {
     this.popups.appendChild(el);
     while (this.popups.children.length > 12) this.popups.firstChild?.remove();
     setTimeout(() => el.remove(), 950);
+  }
+
+  private drawRadar(player: Vehicle, vehicles: Vehicle[], game: Game) {
+    const ctx = this.radarCtx;
+    const S = this.radar.width;
+    const C = S / 2;
+    const R = S * 0.47;                 // drawable radius inside the bezel
+    const s = C / RADAR_RANGE;
+    ctx.clearRect(0, 0, S, S);
+
+    const pPos = player.position;
+    const fwd = player.forward;
+    const heading = Math.atan2(-fwd.x, -fwd.z);
+    const cos = Math.cos(-heading), sin = Math.sin(-heading);
+    /** world offset → radar pixel, rotated into the player's frame */
+    const toRadar = (wx: number, wz: number) => {
+      const dx = wx - pPos.x, dz = wz - pPos.z;
+      return { x: C + (dx * cos - dz * sin) * s, y: C + (dx * sin + dz * cos) * s };
+    };
+
+    const arenaIdx = (game as any).arenaIdx ?? 0;
+    if (!this.radarMap || this.radarArenaIdx !== arenaIdx) {
+      this.radarMap = this.buildRadarMap(arenaIdx);
+      this.radarArenaIdx = arenaIdx;
+    }
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(C, C, R, 0, Math.PI * 2);
+    ctx.clip();
+
+    // street underlay, rotated so the map turns with the car
+    ctx.save();
+    ctx.translate(C, C);
+    ctx.transform(cos, sin, -sin, cos, 0, 0);
+    ctx.globalAlpha = 0.85;
+    const M = this.radarMap.width;
+    ctx.drawImage(this.radarMap, -(pPos.x * s + M / 2), -(pPos.z * s + M / 2));
+    ctx.restore();
+    ctx.globalAlpha = 1;
+
+    // forward cone: tells you at a glance which contacts are actually ahead
+    ctx.fillStyle = 'rgba(150, 230, 255, 0.07)';
+    ctx.beginPath();
+    ctx.moveTo(C, C);
+    ctx.arc(C, C, R, -Math.PI / 2 - 0.5, -Math.PI / 2 + 0.5);
+    ctx.closePath();
+    ctx.fill();
+
+    // range rings at a third and two thirds, so distance is readable
+    ctx.strokeStyle = 'rgba(150, 230, 255, 0.13)';
+    ctx.lineWidth = 1;
+    for (const f of [0.34, 0.67]) {
+      ctx.beginPath(); ctx.arc(C, C, R * f, 0, Math.PI * 2); ctx.stroke();
+    }
+
+    // sudden-death ring, centred on the town square
+    const sdR = (game as any).suddenDeathR;
+    if (sdR !== Infinity && sdR !== undefined) {
+      const o = toRadar(0, 0);
+      ctx.strokeStyle = 'rgba(255, 60, 40, 0.85)';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(o.x, o.y, sdR * s, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+
+    // high-value pickups — diamonds, so they never read as a vehicle
+    const PICKUP_DOTS: Record<string, string> = {
+      missiles: '#ff8a3a', overdrive: '#ff44dd', shield: '#7d95ff', nuke: '#aaff00',
+    };
+    for (const pk of (game.pickups as any)['pickups']) {
+      if (!pk.active || !PICKUP_DOTS[pk.type]) continue;
+      const q = toRadar(pk.pos.x, pk.pos.z);
+      if (Math.hypot(q.x - C, q.y - C) > R - 3) continue;
+      const big = pk.type === 'nuke';
+      const r = big ? 5 : 3.2;
+      if (big) {
+        // the nuke is the one thing worth crossing the map for: give it a halo
+        ctx.fillStyle = 'rgba(170, 255, 0, 0.22)';
+        ctx.beginPath(); ctx.arc(q.x, q.y, 9, 0, Math.PI * 2); ctx.fill();
+      }
+      ctx.fillStyle = PICKUP_DOTS[pk.type];
+      ctx.beginPath();
+      ctx.moveTo(q.x, q.y - r); ctx.lineTo(q.x + r, q.y);
+      ctx.lineTo(q.x, q.y + r); ctx.lineTo(q.x - r, q.y);
+      ctx.closePath(); ctx.fill();
+    }
+
+    // contacts: arrowheads pointing the way they are DRIVING, so you can read
+    // whether someone is closing on you or leaving. Anything beyond range is
+    // pinned to the rim rather than dropped — losing the blip entirely is how
+    // you get killed by someone you knew about a second ago.
+    for (const v of vehicles) {
+      if (v === player || !v.alive) continue;
+      const q = toRadar(v.position.x, v.position.z);
+      let dx = q.x - C, dy = q.y - C;
+      const d = Math.hypot(dx, dy);
+      const off = d > R - 6;
+      if (off) { const k = (R - 6) / d; dx *= k; dy *= k; }
+      const bx = C + dx, by = C + dy;
+
+      const locked = v === player.lockTarget;
+      const bounty = v === (game as any).bountyTarget;
+      ctx.fillStyle = locked ? '#ff3355' : '#ffa23c';
+      if (off) {
+        // off-radar: a small chevron on the bezel, no heading (you cannot see them)
+        ctx.globalAlpha = 0.55;
+        ctx.beginPath(); ctx.arc(bx, by, 2.6, 0, Math.PI * 2); ctx.fill();
+        ctx.globalAlpha = 1;
+      } else {
+        const vh = Math.atan2(-v.forward.x, -v.forward.z) - heading;
+        ctx.save();
+        ctx.translate(bx, by);
+        ctx.rotate(-vh);
+        ctx.beginPath();
+        ctx.moveTo(0, -5.5); ctx.lineTo(4, 4); ctx.lineTo(0, 1.8); ctx.lineTo(-4, 4);
+        ctx.closePath(); ctx.fill();
+        ctx.restore();
+        if (bounty) {
+          ctx.strokeStyle = '#ffd24a';
+          ctx.lineWidth = 1.6;
+          ctx.beginPath(); ctx.arc(bx, by, 8, 0, Math.PI * 2); ctx.stroke();
+        }
+      }
+    }
+    ctx.restore();
+
+    // --- bezel furniture, drawn outside the clip ---
+    // north marker: without one, a rotating map leaves you with no fixed frame
+    const nx = C + Math.sin(-heading) * 0 - Math.sin(heading) * 0;
+    ctx.save();
+    ctx.translate(C, C);
+    ctx.rotate(-heading);
+    ctx.fillStyle = 'rgba(150, 230, 255, 0.75)';
+    ctx.beginPath();
+    ctx.moveTo(0, -R + 1); ctx.lineTo(4, -R + 9); ctx.lineTo(-4, -R + 9);
+    ctx.closePath(); ctx.fill();
+    ctx.restore();
+    void nx;
+
+    // player arrow, always dead centre and pointing up
+    ctx.fillStyle = '#7dffb0';
+    ctx.strokeStyle = 'rgba(0,0,0,0.6)';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(C, C - 7); ctx.lineTo(C + 5, C + 5); ctx.lineTo(C, C + 2.5); ctx.lineTo(C - 5, C + 5);
+    ctx.closePath();
+    ctx.fill(); ctx.stroke();
   }
 
   private pulse(el: HTMLElement, cls: string) {

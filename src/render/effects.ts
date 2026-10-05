@@ -217,30 +217,72 @@ export class Effects {
         opacity: 0.5, fadeIn: 1 });
   }
 
-  /** flamethrower cone burst — call every step while firing */
+  /**
+   * Flamethrower plume — call every step while firing.
+   *
+   * The old version emitted three identical particles from one point with a
+   * random spread, which gave a spherical puff that happened to drift forward.
+   * A real jet reads as a jet because of three things, all of which it lacked:
+   *
+   *  - a CONE. Particles are seeded at staggered distances down the axis, with
+   *    lateral spread proportional to how far along they start, so the plume
+   *    actually widens instead of being equally fat at the nozzle and the tip.
+   *  - a TEMPERATURE GRADIENT. Fuel burns white-blue at the nozzle, yellow in
+   *    the body, and red-black as it starves at the tip. One from/to for every
+   *    particle is what made it read as orange confetti.
+   *  - SPEED SORTING. The core is fast and short-lived, the body slower and
+   *    longer-lived, the fringe slowest. That differential IS the taper — the
+   *    fast core punches out ahead while the edges fall behind and curl up.
+   */
   flameCone(pos: THREE.Vector3, dir: THREE.Vector3) {
-    for (let i = 0; i < 3; i++) {
-      const spread = randomDir().multiplyScalar(2.0);
-      this.emit(pos, dir.clone().multiplyScalar(15 + Math.random() * 8).add(spread),
-        { life: 0.3 + Math.random() * 0.22, sizeFrom: 0.5, sizeTo: 2.3,
-          from: 0xfff0c0, to: 0xd03a06, cell: CELL_FIRE_0, cells: CELL_FIRE_N,
-          gravity: -2.4, drag: 2.3, spin: (Math.random() - 0.5) * 2.5 });
+    // hot core: narrow, fast, gone quickly — the bright spine of the jet
+    for (let i = 0; i < 2; i++) {
+      const t = Math.random();
+      const seed = this.scratchVec.copy(pos).addScaledVector(dir, t * 3.0);
+      const vel = dir.clone().multiplyScalar(30 + Math.random() * 10)
+        .add(randomDir().multiplyScalar(0.5 + t * 1.2));
+      this.emit(seed, vel,
+        { life: 0.16 + Math.random() * 0.1, sizeFrom: 0.34, sizeTo: 1.25,
+          from: 0xcfe4ff, to: 0xffc83a, cell: CELL_FIRE_0, cells: CELL_FIRE_N,
+          gravity: -1.2, drag: 1.6, spin: (Math.random() - 0.5) * 3.5, opacity: 0.8 });
     }
-    // the plume drags soot behind it
-    if (Math.random() < 0.55) {
-      this.emit(pos.clone().addScaledVector(dir, 2.5), dir.clone().multiplyScalar(5),
-        { layer: 1, life: 0.8 + Math.random() * 0.5, sizeFrom: 0.5, sizeTo: 1.7,
-          from: 0x4a443e, to: 0x15151a,
+    // burning body: the bulk of what you see, widening as it goes
+    for (let i = 0; i < 3; i++) {
+      const t = Math.random();
+      const seed = this.scratchVec.copy(pos).addScaledVector(dir, t * 5.0);
+      const vel = dir.clone().multiplyScalar(16 + Math.random() * 8)
+        .add(randomDir().multiplyScalar(1.1 + t * 3.2));
+      this.emit(seed, vel,
+        { life: 0.3 + Math.random() * 0.24, sizeFrom: 0.6, sizeTo: 2.5 + t * 1.4,
+          from: 0xffc23a, to: 0xc22a04, cell: CELL_FIRE_0, cells: CELL_FIRE_N,
+          gravity: -2.8, drag: 2.5, spin: (Math.random() - 0.5) * 2.5 });
+    }
+    // starved fringe: the ragged edge where the fuel runs out and turns over
+    if (Math.random() < 0.7) {
+      const t = 0.5 + Math.random() * 0.5;
+      const seed = this.scratchVec.copy(pos).addScaledVector(dir, t * 6.5);
+      this.emit(seed, dir.clone().multiplyScalar(7 + Math.random() * 5)
+        .add(randomDir().multiplyScalar(2.6 + t * 2.0)),
+        { life: 0.42 + Math.random() * 0.3, sizeFrom: 1.0, sizeTo: 3.4,
+          from: 0xd0490a, to: 0x3a1206, cell: CELL_FIRE_0, cells: CELL_FIRE_N,
+          gravity: -3.4, drag: 3.0, spin: (Math.random() - 0.5) * 1.8, opacity: 0.7 });
+    }
+    // soot, well down the jet where combustion is finished
+    if (Math.random() < 0.5) {
+      this.emit(this.scratchVec.copy(pos).addScaledVector(dir, 4.5 + Math.random() * 3),
+        dir.clone().multiplyScalar(4).add(randomDir().multiplyScalar(1.6)),
+        { layer: 1, life: 0.9 + Math.random() * 0.6, sizeFrom: 0.8, sizeTo: 2.6,
+          from: 0x4a443e, to: 0x14141a,
           cell: CELL_SMOKE_0 + Math.floor(Math.random() * CELL_SMOKE_N),
-          gravity: -1.6, drag: 1.8, spin: (Math.random() - 0.5) * 1,
-          opacity: 0.4, fadeIn: 1 });
+          gravity: -2.0, drag: 1.9, spin: (Math.random() - 0.5) * 1,
+          opacity: 0.38, fadeIn: 1 });
     }
   }
 
   /** expanding ground shockwave ring */
-  shockwave(pos: THREE.Vector3) {
+  shockwave(pos: THREE.Vector3, radius = 11) {
     this.emit(this.scratchVec.copy(pos).setY(pos.y + 0.25), new THREE.Vector3(),
-      { life: 0.5, sizeFrom: 1, sizeTo: 11, from: 0xfff0d0, to: 0x9a6a28,
+      { life: 0.5, sizeFrom: 1, sizeTo: radius, from: 0xfff0d0, to: 0x9a6a28,
         cell: CELL_RING, opacity: 0.9, flat: true });
     for (let i = 0; i < 30; i++) {
       const a = (i / 30) * Math.PI * 2;
