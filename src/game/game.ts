@@ -95,7 +95,9 @@ const SAW_WHEELIE_ANGLE = 0.46;    // ~26 degrees of nose-up while grinding
 // wheelie it is supposed to be grinding with. These came from sweeping the three
 // eulers and measuring the blade TIP in world space (`sawTip`), picking the pose
 // that put it where it belongs. Measured tip, relative to the bike:
-const SAW_REST: [number, number, number] = [-0.16, -2.74, -0.3];   // tucked back-left, 1.23 up
+// slung diagonally across his back like a strap: tip high over his right
+// shoulder, handle low by his left hip
+const SAW_REST: [number, number, number] = [-0.54, -2.62, 0.9];
 const SAW_GRIND: [number, number, number] = [-0.36, 0.50, 0.3];    // ON THE TARMAC, 1.2m out to his left
 const SAW_RAISE: [number, number, number] = [1.55, -1.12, 0.6];    // up over the shoulder, y 2.41
 const SAW_STRIKE: [number, number, number] = [-0.24, -0.22, 0];    // buried in the road 1.6m AHEAD, centred
@@ -355,6 +357,8 @@ export class Game {
       v.frontSpin = r.frontSpin;
       v.rearSpin = r.rearSpin;
       v.sawArm = r.sawArm;
+      v.sawHand = r.sawHand;
+      v.idleArm = r.idleArm;
       v.sawBar = r.sawBar;
       v.rider = r.rider;
     }
@@ -2004,8 +2008,17 @@ export class Game {
         // fire licking along the heated part of the bar
         if (v.specialEnergy > 0.02 && v.sawTip) {
           v.sawBar.getWorldPosition(_v2);
-          this.effects.bladeFire(_v2, v.sawTip(_v3), v.specialEnergy);
+          // Hard down-weight while it is only slung on his back: a fully charged
+          // blade burning at grinding intensity over his shoulder made the whole
+          // bike read as being on fire. Grinding it is the thing that stokes it.
+          const heat = 0.18 + 0.82 * Math.max(g, v.sawSwing > 0 ? 1 : 0);
+          this.effects.bladeFire(_v2, v.sawTip(_v3), v.specialEnergy, heat);
         }
+        // he only grips it when he is using it; otherwise it is slung and his
+        // left hand is on his thigh
+        const holding = g > 0.04 || v.sawSwing > 0;
+        if (v.sawHand) v.sawHand.visible = holding;
+        if (v.idleArm) v.idleArm.visible = !holding;
         // nose up, pivoting on the rear axle, and the rider leans back with it
         if (v.wheelieNode) v.wheelieNode.rotation.x = g * SAW_WHEELIE_ANGLE;
         if (v.rider) v.rider.rotation.x = -g * 0.3;

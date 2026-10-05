@@ -36,6 +36,10 @@ export interface ReaperResult extends CarMeshResult {
   rearSpin: THREE.Object3D;
   sawArm: THREE.Object3D;
   sawBar: THREE.Object3D;
+  /** the gripping arm — hidden while the saw is slung on his back */
+  sawHand: THREE.Object3D;
+  /** the resting arm — hidden while he is holding the saw */
+  idleArm: THREE.Object3D;
   rider: THREE.Object3D;
   /** world-space tip of the blade — the grind contact point */
   sawTip(out: THREE.Vector3): THREE.Vector3;
@@ -222,12 +226,26 @@ export function buildReaper(spec: CarSpec, colorOverride?: number): ReaperResult
   put(rider, new THREE.SphereGeometry(0.05, 8, 6), black, -0.26, 0.26, -0.7);
 
   // ---------------------------------------------------------------- the saw
+  // left arm resting on his thigh, shown only while the saw is slung
+  const idleArm = new THREE.Group();
+  rider.add(idleArm);
+  const iArm = put(idleArm, taper(0.055, 0.05, 0.38, 8), skin, -0.22, 0.38, -0.2);
+  iArm.rotation.set(Math.PI / 2 - 0.8, 0, -0.15);
+  const iFore = put(idleArm, taper(0.05, 0.045, 0.32, 8), skin, -0.25, 0.17, -0.32);
+  iFore.rotation.set(Math.PI / 2 - 0.5, 0, -0.1);
+  put(idleArm, new THREE.SphereGeometry(0.05, 8, 6), skin, -0.26, 0.05, -0.4);
+
   const sawArm = new THREE.Group();
   sawArm.position.set(-0.22, 0.48, -0.1);     // LEFT shoulder
   rider.add(sawArm);
-  const armS = put(sawArm, taper(0.055, 0.05, 0.38, 8), skin, -0.04, -0.1, -0.1);
+  // The gripping arm rotates WITH the blade, so it is only shown when he is
+  // actually holding it. At rest the saw is slung across his back and this arm
+  // would be wrenched backwards with it; `idleArm` below takes over instead.
+  const sawHand = new THREE.Group();
+  sawArm.add(sawHand);
+  const armS = put(sawHand, taper(0.055, 0.05, 0.38, 8), skin, -0.04, -0.1, -0.1);
   armS.rotation.set(Math.PI / 2 - 0.3, 0, -0.2);
-  const foreS = put(sawArm, taper(0.05, 0.045, 0.32, 8), skin, -0.07, -0.26, -0.26);
+  const foreS = put(sawHand, taper(0.05, 0.045, 0.32, 8), skin, -0.07, -0.26, -0.26);
   foreS.rotation.set(Math.PI / 2 - 0.1, 0, -0.1);
 
   const sawBar = new THREE.Group();
@@ -318,7 +336,7 @@ export function buildReaper(spec: CarSpec, colorOverride?: number): ReaperResult
   return {
     group, wheels, wheelRadius: wheelR, chassis, loadout,
     wheelieNode, frontSteer, frontSpin, rearSpin,
-    sawArm, sawBar, rider,
+    sawArm, sawBar, sawHand, idleArm, rider,
     sawTip: (out) => { tip.getWorldPosition(_t); return out.copy(_t); },
     setCharge: (t) => {
       const lit = t > 0.02;

@@ -324,17 +324,20 @@ export class Effects {
    * as well as how fierce it is — so the blade reads as a meter from across the
    * arena, the way a lit fuse does.
    */
-  bladeFire(from: THREE.Vector3, to: THREE.Vector3, t: number) {
-    if (t <= 0.02) return;
-    const n = 1 + Math.floor(t * 3);
+  bladeFire(from: THREE.Vector3, to: THREE.Vector3, t: number, heat = 1) {
+    if (t <= 0.02 || heat <= 0.02) return;
+    // Tight and short-lived. The first version threw long-lived, growing puffs
+    // upward and they drifted clear of the blade and over the bike, so the whole
+    // vehicle read as being ON FIRE rather than carrying something that was.
+    const n = Math.random() < heat ? 1 + Math.floor(t * 2 * heat) : 0;
     for (let i = 0; i < n; i++) {
       const f = Math.random() * (0.1 + t * 0.9);         // only the heated part burns
       const at = this.scratchVec.copy(from).lerp(to, f);
       this.emit(at, this.scratchVec2.set(
-        (Math.random() - 0.5) * 1.2, 1.4 + Math.random() * 2.2 * t, (Math.random() - 0.5) * 1.2),
-        { life: 0.2 + Math.random() * 0.22, sizeFrom: 0.14 + t * 0.2, sizeTo: 0.5 + t * 0.5,
-          from: 0xffd47a, to: 0xd03a06, cell: CELL_FIRE_0, cells: CELL_FIRE_N,
-          gravity: -2.2, drag: 2.4, spin: (Math.random() - 0.5) * 3, opacity: 0.8 });
+        (Math.random() - 0.5) * 0.5, 0.7 + Math.random() * 1.1 * t, (Math.random() - 0.5) * 0.5),
+        { life: 0.1 + Math.random() * 0.12, sizeFrom: 0.1 + t * 0.12, sizeTo: 0.26 + t * 0.22,
+          from: 0xffc864, to: 0xc0340a, cell: CELL_FIRE_0, cells: CELL_FIRE_N,
+          gravity: -1.0, drag: 4.5, spin: (Math.random() - 0.5) * 3, opacity: 0.7 });
     }
   }
 

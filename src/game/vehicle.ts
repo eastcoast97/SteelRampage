@@ -84,6 +84,8 @@ export class Vehicle {
   rearSpin: THREE.Object3D | null = null;
   sawArm: THREE.Object3D | null = null;
   sawBar: THREE.Object3D | null = null;
+  sawHand: THREE.Object3D | null = null;
+  idleArm: THREE.Object3D | null = null;
   rider: THREE.Object3D | null = null;
   shieldMesh: THREE.Mesh | null = null;
   /** material of the shield field — its uniforms are driven in Game.render */
