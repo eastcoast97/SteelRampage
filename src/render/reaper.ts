@@ -223,15 +223,15 @@ export function buildReaper(spec: CarSpec, colorOverride?: number): ReaperResult
 
   // ---------------------------------------------------------------- the saw
   const sawArm = new THREE.Group();
-  sawArm.position.set(0.22, 0.48, -0.1);      // right shoulder
+  sawArm.position.set(-0.22, 0.48, -0.1);     // LEFT shoulder
   rider.add(sawArm);
-  const armR = put(sawArm, taper(0.055, 0.05, 0.38, 8), skin, 0.04, -0.1, -0.1);
-  armR.rotation.set(Math.PI / 2 - 0.3, 0, 0.2);
-  const foreR = put(sawArm, taper(0.05, 0.045, 0.32, 8), skin, 0.07, -0.26, -0.26);
-  foreR.rotation.set(Math.PI / 2 - 0.1, 0, 0.1);
+  const armS = put(sawArm, taper(0.055, 0.05, 0.38, 8), skin, -0.04, -0.1, -0.1);
+  armS.rotation.set(Math.PI / 2 - 0.3, 0, -0.2);
+  const foreS = put(sawArm, taper(0.05, 0.045, 0.32, 8), skin, -0.07, -0.26, -0.26);
+  foreS.rotation.set(Math.PI / 2 - 0.1, 0, -0.1);
 
   const sawBar = new THREE.Group();
-  sawBar.position.set(0.08, -0.36, -0.42);
+  sawBar.position.set(-0.08, -0.36, -0.42);
   sawArm.add(sawBar);
   put(sawBar, new THREE.BoxGeometry(0.13, 0.17, 0.3), black, 0, 0, 0.14);
   put(sawBar, taper(0.035, 0.035, 0.2, 8), chrome, 0, 0.1, 0.1).rotation.z = Math.PI / 2;
@@ -265,7 +265,7 @@ export function buildReaper(spec: CarSpec, colorOverride?: number): ReaperResult
   tip.position.set(0, -0.07, -0.14 - BLADE);
   sawBar.add(tip);
 
-  sawArm.rotation.set(-0.15, 0.85, -0.25);    // held out to the right, like the ref
+  sawArm.rotation.set(-0.6, -0.95, 0.15);     // held out to his LEFT, levelled
 
   group.traverse((o) => { if ((o as THREE.Mesh).isMesh) o.castShadow = true; });
 

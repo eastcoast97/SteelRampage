@@ -83,11 +83,22 @@ const SAW_DAMAGE = 36;
 const SAW_RANGE = 9.5;
 const SAW_CHARGE_TIME = 5.0;     // seconds of continuous grinding for a full bar
 const SAW_GRIND_MIN_SPEED = 7;   // below this the blade is not biting
-const SAW_SWING_TIME = 0.45;
+const SAW_SWING_TIME = 0.5;
 const SAW_WHEELIE_ANGLE = 0.46;    // ~26 degrees of nose-up while grinding
-// arm poses, as [x, y, z] euler on the shoulder pivot
-const SAW_REST: [number, number, number] = [-0.6, 0.95, -0.15];     // held out right, levelled
-const SAW_GRIND: [number, number, number] = [0.95, 0.62, -0.1];     // tip on the tarmac
+// Arm poses, as [x, y, z] euler on the LEFT shoulder pivot.
+// NOTE the grind pose is applied with the wheelie angle SUBTRACTED from x — the
+// arm hangs inside the node that pitches the bike up, so without that the blade
+// rises with the nose and grinds thin air.
+// SOLVED NUMERICALLY, not guessed: the first set was hand-written and had the
+// signs backwards on two axes — +x pitches the blade UP, not down, and -y swings
+// it to his RIGHT. The result was a rider holding the saw in the air during the
+// wheelie it is supposed to be grinding with. These came from sweeping the three
+// eulers and measuring the blade TIP in world space (`sawTip`), picking the pose
+// that put it where it belongs. Measured tip, relative to the bike:
+const SAW_REST: [number, number, number] = [-0.16, -2.74, -0.3];   // tucked back-left, 1.23 up
+const SAW_GRIND: [number, number, number] = [-0.36, 0.50, 0.3];    // ON THE TARMAC, 1.2m out to his left
+const SAW_RAISE: [number, number, number] = [1.55, -1.12, 0.6];    // up over the shoulder, y 2.41
+const SAW_STRIKE: [number, number, number] = [-0.24, -0.22, 0];    // buried in the road 1.6m AHEAD, centred
 const FLAME_DPS = 20;
 const TURRET_SHOT = 2.0;
 const MINIGUN_SHOT = 3.5;
@@ -1968,23 +1979,24 @@ export class Game {
       // swing is a game event with a timer, not a function of the body's state.
       if (v.sawArm && v.sawBar) {
         const g = v.sawGrind;
+        const lerp3 = (a: readonly number[], b: readonly number[], k: number) =>
+          v.sawArm!.rotation.set(
+            a[0] + (b[0] - a[0]) * k,
+            a[1] + (b[1] - a[1]) * k,
+            a[2] + (b[2] - a[2]) * k);
         if (v.sawSwing > 0) {
-          // THE WHIP: the arm comes across the front of the bike. 0 at the start
-          // of the swing, 1 at the end; the arc peaks early so the strike lands
-          // at the front of the motion rather than the end of it.
+          // THE WHIP, and it comes from ABOVE: the blade leaves the road, goes
+          // up over his shoulder, then chops down across the front of the bike.
+          // A flat sweep was the first version and read as a cricket shot.
           const t = 1 - v.sawSwing / SAW_SWING_TIME;
-          const arc = Math.sin(Math.min(1, t * 1.6) * Math.PI);
-          v.sawArm.rotation.set(
-            SAW_REST[0] + arc * 0.5,
-            SAW_REST[1] - arc * 2.1,     // swings from out-right to across the front
-            SAW_REST[2] - arc * 0.7);
+          if (t < 0.3) lerp3(SAW_GRIND, SAW_RAISE, t / 0.3);          // snatch it up
+          else lerp3(SAW_RAISE, SAW_STRIKE, Math.min(1, (t - 0.3) / 0.45));  // and down
         } else {
-          // rest → grind: the blade drops from carried-out-right to flat on the
-          // tarmac beside the rear wheel
-          v.sawArm.rotation.set(
-            SAW_REST[0] + g * (SAW_GRIND[0] - SAW_REST[0]),
-            SAW_REST[1] + g * (SAW_GRIND[1] - SAW_REST[1]),
-            SAW_REST[2] + g * (SAW_GRIND[2] - SAW_REST[2]));
+          // rest → grind. The wheelie angle is subtracted because this arm is a
+          // child of the node that pitches the bike: without it the blade points
+          // skyward exactly when it is supposed to be cutting tarmac.
+          lerp3(SAW_REST, SAW_GRIND, g);
+          v.sawArm.rotation.x -= g * SAW_WHEELIE_ANGLE;
         }
         // the chain only runs when it is working
         if (g > 0.02 || v.sawSwing > 0) v.sawBar.rotation.z += dt * (26 + g * 40);
