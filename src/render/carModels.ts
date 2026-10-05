@@ -25,7 +25,9 @@ const MODEL_YAW: Partial<Record<CarSpec['build'], number>> = {
   tank: -Math.PI / 2,
   hearse: -Math.PI / 2,
   ambulance: -Math.PI / 2,
-  // the bike came back with its length already on Z, so no correction
+  // the bike came back with its length already on Z, but pointing the WRONG WAY
+  // down it — it rode backwards, nose at the camera
+  bike: Math.PI,
 };
 
 /** Builds whose GLB ships its own authored PBR textures (AI-generated or

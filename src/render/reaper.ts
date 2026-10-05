@@ -63,7 +63,12 @@ export function buildReaper(spec: CarSpec, _colorOverride?: number): ReaperResul
   chassis.position.y = -0.98;
   group.add(chassis);
 
-  const REAR_Z = 0.78, FRONT_Z = -1.12, wheelR = 0.42;
+  // measured by the wheel cut: axles at model y -0.671 / +0.629 with radii
+  // 0.30 / 0.36, on a body 1.899 long that we scale to spec.size.z * 2
+  const MODEL_LEN = 1.899, K = (spec.size.z * 2) / MODEL_LEN;
+  const FRONT_Z = -0.671 * K, REAR_Z = 0.629 * K;
+  const FRONT_R = 0.297 * K, REAR_R = 0.356 * K;   // per-wheel, as measured
+  const wheelR = REAR_R;                          // the rig's single radius
   const wheelieNode = new THREE.Group();
   wheelieNode.position.set(0, wheelR, REAR_Z);
   chassis.add(wheelieNode);
@@ -93,7 +98,10 @@ export function buildReaper(spec: CarSpec, _colorOverride?: number): ReaperResul
   const sawArm = new THREE.Group();
   // Mounted LOW and outboard. At shoulder height the 1.2m bar simply cannot
   // reach the tarmac — the grind pose solved to a tip 0.49m in the air.
-  sawArm.position.set(-0.36, 0.92, 0.12);    // at his left hand, hanging outboard
+  // NOTE the sign: the body carries MODEL_YAW = PI to face the right way down
+  // the track, which mirrors the rider in this (unrotated) frame — his left hand
+  // is at POSITIVE x here.
+  sawArm.position.set(0.3, 0.92, -0.05);     // at his left hand
   rider.add(sawArm);
   const sawHand = new THREE.Group();         // the generated arm cannot move, but
   sawArm.add(sawHand);                       // the game's toggles stay harmless
@@ -141,37 +149,53 @@ export function buildReaper(spec: CarSpec, _colorOverride?: number): ReaperResul
   // in the road — so each tyre sits inside a spinner group. A bike doubles the
   // pivots onto two axles and leaves the second of each pair empty.
   const rubber = new THREE.MeshStandardMaterial({ color: 0x15151a, roughness: 0.93, metalness: 0.04 });
-  const chrome = new THREE.MeshStandardMaterial({ color: 0xc6cad2, roughness: 0.18, metalness: 1 });
+  // dulled right down: at roughness 0.18 the rims blew out to white discs under
+  // the sunbaked preset's bloom and the wheels read as balloons
+  const chrome = new THREE.MeshStandardMaterial({ color: 0x8d9099, roughness: 0.42, metalness: 0.9 });
+  // Prefer the AI wheel the fleet already ships: hand-built primitives next to a
+  // photoreal bike read as cardboard, and this one is already paid for.
   const makeWheel = (r: number, halfWidth: number) => {
     const spin = new THREE.Group();
+    if (model?.wheel) {
+      const w = model.wheel.clone(true);
+      const wb = new THREE.Box3().setFromObject(w);
+      const ws = wb.getSize(new THREE.Vector3());
+      // scale on its DIAMETER, which is its largest cross-section, not its width
+      const dia = Math.max(ws.y, ws.z);
+      w.scale.setScalar((r * 2) / Math.max(1e-3, dia));
+      const wb2 = new THREE.Box3().setFromObject(w);
+      w.position.sub(wb2.getCenter(new THREE.Vector3()));
+      w.traverse((o) => { if ((o as THREE.Mesh).isMesh) o.castShadow = true; });
+      spin.add(w);
+      return spin;
+    }
     const tyre = new THREE.Mesh(new THREE.CylinderGeometry(r, r, halfWidth * 2, 22), rubber);
     tyre.rotation.z = Math.PI / 2;
-    const rim = new THREE.Mesh(new THREE.CylinderGeometry(r * 0.46, r * 0.46, halfWidth * 2.1, 14), chrome);
+    const rim = new THREE.Mesh(new THREE.CylinderGeometry(r * 0.3, r * 0.3, halfWidth * 2.1, 14), chrome);
     rim.rotation.z = Math.PI / 2;
     spin.add(tyre, rim);
-    for (let k = 0; k < 6; k++) {
-      const spoke = new THREE.Mesh(new THREE.BoxGeometry(halfWidth * 1.5, r * 1.75, 0.025), chrome);
-      spoke.rotation.x = (k / 6) * Math.PI;
+    // laced spokes, thin: a solid disc reads as a scooter wheel, and the
+    // original was a wire wheel
+    for (let k = 0; k < 8; k++) {
+      const spoke = new THREE.Mesh(new THREE.BoxGeometry(halfWidth * 0.5, r * 1.82, 0.016), chrome);
+      spoke.rotation.x = (k / 8) * Math.PI;
       spin.add(spoke);
     }
     spin.traverse((o) => { if ((o as THREE.Mesh).isMesh) o.castShadow = true; });
     return spin;
   };
   const frontSteer = new THREE.Group();
-  frontSteer.position.set(0, wheelR, FRONT_Z);
-  const frontSpin = makeWheel(wheelR * 0.98, 0.07);
+  frontSteer.position.set(0, FRONT_R, FRONT_Z);
+  const frontSpin = makeWheel(FRONT_R, 0.055);     // thin front, like the original
   frontSteer.add(frontSpin);
   content.add(frontSteer);
-  const rearSpin = makeWheel(wheelR, 0.115);
-  rearSpin.position.set(0, wheelR, REAR_Z);
+  const rearSpin = makeWheel(REAR_R, 0.105);       // fat rear
+  rearSpin.position.set(0, REAR_R, REAR_Z);
   content.add(rearSpin);
-  // The generated body has its own wheels baked into the same fused shell, and
-  // they are far better looking than these — spoked, photoreal. Drawing both
-  // gives the vehicle FOUR wheels (the same trap phase 3.3 hit on the cars).
-  // These stay in the tree so the interface and the rig are unchanged, but they
-  // are only shown when the generated body failed to load.
-  frontSteer.visible = !model;
-  rearSpin.visible = !model;
+  // The generated body's own wheels are CUT OUT in Blender
+  // (tools/blender/cut_bike_wheels.py) precisely so these can exist: a fused
+  // shell cannot spin its own wheels, and a bike with frozen wheels at 30 m/s
+  // reads as broken. Mounted at the axle positions the cut measured.
 
   const wheels: THREE.Object3D[] = [];
   for (let i = 0; i < 4; i++) {
