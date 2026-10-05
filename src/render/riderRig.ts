@@ -43,9 +43,33 @@ function find(bones: THREE.Bone[], candidates: string[][]): THREE.Bone | null {
   return null;
 }
 
+/**
+ * Every bone's REST rotation, captured before anything poses it.
+ *
+ * A rig's rest pose is not all-identity — each bone carries the rotation that
+ * builds the A-pose. Writing `bone.rotation.set(...)` therefore does not pose
+ * the skeleton, it DESTROYS it, and the skinned mesh collapses into something
+ * that renders as nothing at all. Poses must be applied as offsets from rest.
+ */
+const REST = new WeakMap<THREE.Bone, THREE.Euler>();
+
+/** set a bone to its rest rotation plus this offset */
+export function poseBone(b: THREE.Bone | null, dx: number, dy = 0, dz = 0) {
+  if (!b) return;
+  const rest = REST.get(b);
+  if (!rest) { b.rotation.set(dx, dy, dz); return; }
+  b.rotation.set(rest.x + dx, rest.y + dy, rest.z + dz);
+}
+
 export function collectBones(root: THREE.Object3D): { bones: THREE.Bone[]; map: RiderBones } {
   const bones: THREE.Bone[] = [];
-  root.traverse((o) => { if ((o as THREE.Bone).isBone) bones.push(o as THREE.Bone); });
+  root.traverse((o) => {
+    if ((o as THREE.Bone).isBone) {
+      const b = o as THREE.Bone;
+      bones.push(b);
+      if (!REST.has(b)) REST.set(b, b.rotation.clone());
+    }
+  });
 
   // ordered by specificity: "leftforearm" must beat "leftarm", so it is tried first
   const map: RiderBones = {
@@ -83,12 +107,11 @@ export function report(bones: THREE.Bone[], map: RiderBones): Record<string, str
  * and the arms reaching to the bars are all applied here as bone rotations.
  */
 export function poseSeated(m: RiderBones) {
-  const set = (b: THREE.Bone | null, x: number, y = 0, z = 0) => { if (b) b.rotation.set(x, y, z); };
-  set(m.spine, -0.28);                 // leaning forward onto the bars
-  set(m.upLegL, -1.35, 0.1, 0.18);     // thighs forward and splayed round the tank
-  set(m.upLegR, -1.35, -0.1, -0.18);
-  set(m.legL, 1.15);                   // knees bent back to the pegs
-  set(m.legR, 1.15);
-  set(m.armR, -0.95, 0.35, 0.55);      // right hand out to the bar
-  set(m.foreArmR, -0.35);
+  poseBone(m.spine, -0.25);                  // leaning forward onto the bars
+  poseBone(m.upLegL, -1.25, 0.1, 0.16);      // thighs forward, splayed round the tank
+  poseBone(m.upLegR, -1.25, -0.1, -0.16);
+  poseBone(m.legL, 1.1);                     // knees bent back to the pegs
+  poseBone(m.legR, 1.1);
+  poseBone(m.armR, -0.85, 0.3, 0.5);         // right hand out to the bar
+  poseBone(m.foreArmR, -0.3);
 }

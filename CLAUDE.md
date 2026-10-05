@@ -215,6 +215,18 @@ Arm poses were re-solved against the new rig by the same sweep-and-measure metho
 AUDIO: grind retuned to a real two-stroke (sub octave for mass, lowpass 1350 to kill the fizz, faster/shallower warble — a slow deep one was a motorboat putter). The laugh was inaudible because the slam fires an explosion in the SAME FRAME and was masking it; it now starts 0.14s later and rides the explosion's decay.
 Verified: bot REAPER 1966m/90s, 16s grinding, 3 slams, no errors; grind tip measured on the tarmac at y 0.16 while wheelied 26 degrees.
 
+Phase 3.14 (done): **REAPER composed from THREE generated models, and the saw is THROWN.**
+`reaper-bike.glb` (chopper, nobody on it) + `reaper-rider.glb` (RIGGED, 24-joint humanoid) + `reaper-saw.glb`. They must be separate: these meshes come back as a single fused shell, so a rider generated on the bike is welded to it and can never move an arm. Generated alone and STANDING (a seated mesh confuses the joint fitter), he comes back rigged and is folded into a riding pose through his own bones. The saw hangs off his LEFT HAND BONE, so posing the arm moves the saw for free.
+**THROW, not slam** (user, with reference footage): release hurls the saw — 34 m/s, 34m range, aim-assisted inside a 0.6-dot forward cone, 36 ARMOR-PIERCING on contact, then it returns to his hand. The mesh is REPARENTED to the scene for the flight rather than duplicated, so there is only ever the one he had, and he is visibly unarmed until it comes back. Melee reach was also simply wrong for the vehicle: at 9.5m the thinnest-skinned car in the game had to be touching what it wanted to kill.
+**FOUR BUGS, each of which produced an invisible or absurd vehicle — all worth knowing:**
+(1) `bone.rotation.set()` DESTROYS a rig. A rest pose is not identity; each bone carries the rotation that builds the A-pose. Poses must be offsets from rest — `poseBone()` in riderRig.ts keeps every bone's rest euler in a WeakMap. Writing absolute rotations collapsed the skinned mesh into something that rendered as nothing.
+(2) **A SkinnedMesh's size is in its BONES, not its geometry.** The bind-pose geometry bbox read 0.017 tall (the armature carries a 0.01 scale and the bone positions are ~100x larger to match), so scaling off it multiplied the rider by 105 — skeleton 100m in the air, spread over 75m, drawn far outside the view. Measure the bone world positions.
+(3) Scaling a bike against its CUT body is wrong: the wheels were its longest parts, so what remains is far shorter than the vehicle. `cut_bike_wheels.py` now reports `fullLength` (axle to axle plus radii), and reaper.ts scales against that.
+(4) Place a model in its OWN axes BEFORE any yaw. Measuring a world-axis bounding box of a rotated object does not give the object's extent, and that put the bike sideways at four times its size.
+The cut script also auto-detects the length axis (two generations of the same bike came back on different axes) and REFUSES outright if the contact band shows no gap worth calling a wheelbase — it had silently deleted 36,411 of 36,484 vertices.
+`SkeletonUtils.clone`, never `Object3D.clone`: a plain clone stays bound to the ORIGINAL skeleton, so every REAPER on the field would pose in lockstep.
+Verified: throw deals 36.0 through 55 armor, flies 20m in 0.48s, saw returns; bot soak 1738m/90s, 20s grinding, 4 throws, wheels turning on 1759 sampled frames, no saws leaked, no errors.
+
 Ideas: gamepad support, energy attacks (freeze), split-screen, dedicated server-sim (extract game.step from THREE/DOM), interpolation-delay auto-tuning from jitter.
 
 ## Testing recipe (headless, in preview eval)

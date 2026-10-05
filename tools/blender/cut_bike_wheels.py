@@ -87,8 +87,20 @@ for grp in groups:
     r = min(r, span * 0.33)
     axles.append({'y': cy, 'r': r, 'cz': zmin + r, 'n': len(grp)})
 
+# Everything render/reaper.ts needs to place the replacement wheels and stand
+# the bike on the road, in the model's own units. Blender and the exported glTF
+# agree on the length axis and its scale (verified), so these transfer directly;
+# glTF y is Blender z.
+full_lo = min(a['y'] - a['r'] for a in axles)
+full_hi = max(a['y'] + a['r'] for a in axles)
 report = {'zmin': round(zmin, 4), 'lengthAxis': LONG, 'wheelbaseGap': round(gap, 4),
-          'axles': [{k: round(v, 4) for k, v in a.items()} for a in axles]}
+          'axles': [{k: round(v, 4) for k, v in a.items()} for a in axles],
+          # the FULL length including the wheels. Measuring the cut body instead
+          # is the trap: the wheels were its longest parts, so what is left is
+          # shorter than the vehicle and scaling against it makes the bike huge.
+          'fullLength': round(full_hi - full_lo, 4),
+          'groundY': round(zmin, 4),
+          'axleMid': round(sum(a['y'] for a in axles) / 2, 4)}
 
 # --- 2. delete every vertex inside either wheel ---
 bpy.context.view_layer.objects.active = ob

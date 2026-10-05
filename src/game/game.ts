@@ -12,6 +12,7 @@ import { buildMine } from '../render/mine';
 import { buildNuke } from '../render/nuke';
 import { buildShield } from '../render/shield';
 import type { ReaperResult } from '../render/reaper';
+import { poseBone } from '../render/riderRig';
 import { Effects } from '../render/effects';
 import { Hud } from '../ui/hud';
 import { sfx } from '../audio/sfx';
@@ -80,10 +81,25 @@ const SLAM_RADIUS = 12.1;
 // skin in the game. The reward for that has to be worth the exposure, and being
 // the one thing a JUGGERNAUT is actually afraid of is that reward.
 const SAW_DAMAGE = 36;
-const SAW_RANGE = 9.5;
+// He THROWS it. The reference footage is unambiguous — the saw leaves his hand
+// and flies at the target — and it is the better mechanic anyway: at melee reach
+// the thinnest-skinned vehicle in the game has to be touching whatever it wants
+// to kill, which is the worst possible place for it to be. Thrown, the charge
+// buys reach: you are exposed while you grind, and the payoff is landing from
+// outside ramming range.
+const SAW_THROW_SPEED = 34;
+const SAW_THROW_RANGE = 34;
+const SAW_HIT_RADIUS = 2.6;
 const SAW_CHARGE_TIME = 5.0;     // seconds of continuous grinding for a full bar
 const SAW_GRIND_MIN_SPEED = 7;   // below this the blade is not biting
 const SAW_SWING_TIME = 0.5;
+// Arm poses as [shoulder x, y, z, elbow x] on the GENERATED RIG's left arm.
+// The saw hangs off the left hand bone, so posing the arm moves the saw for
+// free — there is no second pose system to keep in step.
+const SAW_REST = [-0.15, 0.0, 0.45, -0.55] as const;    // hanging at his side
+const SAW_GRIND = [0.55, 0.15, 0.95, -0.2] as const;    // reaching down to the tarmac
+const SAW_RAISE = [-2.0, 0.1, 0.5, -1.5] as const;      // cocked back over the shoulder
+const SAW_STRIKE = [-0.5, -0.3, 0.2, -0.1] as const;    // hurled out front, arm extended
 const SAW_WHEELIE_ANGLE = 0.46;    // ~26 degrees of nose-up while grinding
 // Arm poses, as [x, y, z] euler on the LEFT shoulder pivot.
 // NOTE the grind pose is applied with the wheelie angle SUBTRACTED from x — the
@@ -97,11 +113,7 @@ const SAW_WHEELIE_ANGLE = 0.46;    // ~26 degrees of nose-up while grinding
 // that put it where it belongs. Measured tip, relative to the bike:
 // slung diagonally across his back like a strap: tip high over his right
 // shoulder, handle low by his left hip
-const SAW_REST: [number, number, number] = [-0.86, -2.40, 0.9];    // slung back over his shoulder
 // +SAW_WHEELIE_ANGLE baked in, because the render pass subtracts it again
-const SAW_GRIND: [number, number, number] = [1.84, 2.78, 0.9];     // tip ON the tarmac, 0.8m to his left
-const SAW_RAISE: [number, number, number] = [-2.40, -2.68, -0.9];  // up over the shoulder, 2.2m
-const SAW_STRIKE: [number, number, number] = [2.64, -2.96, -0.9];  // chopped down out front
 const FLAME_DPS = 20;
 const TURRET_SHOT = 2.0;
 const MINIGUN_SHOT = 3.5;
@@ -244,6 +256,8 @@ export class Game {
   player: Vehicle;
   bots: BotController[] = [];
   missiles: Missile[] = [];
+  thrownSaws: { pos: THREE.Vector3; dir: THREE.Vector3; owner: Vehicle;
+                mesh: THREE.Object3D | null; travelled: number; spin: number; dead: boolean }[] = [];
   mines: Mine[] = [];
   barrels: Barrel[] = [];
   bombs: RemoteBomb[] = [];
@@ -359,6 +373,9 @@ export class Game {
       v.rearSpin = r.rearSpin;
       v.sawArm = r.sawArm;
       v.sawHand = r.sawHand;
+      v.bones = r.bones;
+      v.releaseSaw = r.releaseSaw;
+      v.retrieveSaw = r.retrieveSaw;
       v.idleArm = r.idleArm;
       v.sawBar = r.sawBar;
       v.rider = r.rider;
@@ -574,6 +591,7 @@ export class Game {
     }
 
     this.updateMissiles(dt);
+    this.updateThrownSaws(dt);
     this.updateMines(dt);
     this.updateBombs(dt);
     this.updateBarrels(dt);
@@ -1130,47 +1148,102 @@ export class Game {
     v.input.special = false;
   }
 
+  /**
+   * The release: he hurls the saw at whatever is in front of him.
+   *
+   * The saw is REPARENTED out of his hand rather than duplicated, so there is
+   * only ever the one he actually had and he is visibly unarmed until it
+   * returns.
+   */
   private doSawSlam(v: Vehicle) {
     v.specialEnergy = 0;
     v.sawSwing = SAW_SWING_TIME;
     v.spawnProtection = 0;
-    const fwd = v.forward;
-    const reach = _v2.copy(v.position).addScaledVector(fwd, SAW_RANGE * 0.55);
+    const fwd = v.forward.clone();
 
-    if (this.netOpts?.role === 'host') {
-      this.netEvents.push({ k: 'saw', x: +reach.x.toFixed(1), y: +reach.y.toFixed(1), z: +reach.z.toFixed(1) });
-    }
-    this.effects.sawSlam(reach, fwd);
-    // the release is the laugh; the explosion below only fires if it CONNECTS
-    sfx.sawLaugh(THREE.MathUtils.clamp(1.4 - reach.distanceTo(this.player.position) / 60, 0.2, 1.2));
-    this.effects.trauma = Math.min(1, this.effects.trauma + 0.5);
-
-    // a short wide arc in front, not a radius around the bike — you have to be
-    // facing what you want to cut
-    let best: Vehicle | null = null, bestD = Infinity;
+    // Aim assist inside a forward cone, so a throw that was roughly right still
+    // connects; outside the cone it flies dead straight.
+    let aim: Vehicle | null = null, bestD = Infinity;
     for (const e of this.vehicles) {
       if (e === v || !e.alive) continue;
       _v1.copy(e.position).sub(v.position);
       const d = _v1.length();
-      if (d > SAW_RANGE) continue;
-      if (fwd.dot(_v1.normalize()) < 0.35) continue;   // ~110 degree arc
-      if (d < bestD) { bestD = d; best = e; }
+      if (d > SAW_THROW_RANGE) continue;
+      if (fwd.dot(_v1.normalize()) < 0.6) continue;
+      if (d < bestD) { bestD = d; aim = e; }
     }
-    if (!best) return;
+    const dir = aim
+      ? aim.position.clone().setY(aim.position.y + 0.3).sub(v.position).normalize()
+      : fwd;
 
-    // ARMOR-PIERCING, like the nuke and for the same reason: it is the payoff
-    // for a long exposed charge and must not be worst against the heavy
-    const killed = best.takeDamage(SAW_DAMAGE, v, this.time, true);
-    _v1.copy(best.position).sub(v.position).normalize();
-    _v1.y = 0.55;
-    _v1.normalize();
-    const imp = 7 * best.body.mass();
-    best.body.applyImpulse({ x: _v1.x * imp, y: _v1.y * imp, z: _v1.z * imp }, true);
-    this.effects.sparks(best.position, 26, 0xffb060);
-    sfx.explosion(THREE.MathUtils.clamp(1.3 - best.position.distanceTo(this.player.position) / 60, 0.25, 1.1));
-    if (best === this.player) this.hud.showDamage(0.6);
-    if (v === this.player) this.hud.showHitmarker();
-    if (killed) this.onKill(v, best);
+    const from = v.position.clone()
+      .addScaledVector(fwd, v.spec.size.z * 0.8)
+      .setY(v.position.y + 0.5);
+
+    const mesh = v.releaseSaw?.() ?? null;
+    if (mesh) {
+      this.scene.add(mesh);
+      mesh.position.copy(from);
+      v.sawThrown = true;
+    }
+    this.thrownSaws.push({ pos: from.clone(), dir, owner: v, mesh, travelled: 0, spin: 0, dead: false });
+
+    if (this.netOpts?.role === 'host') {
+      this.netEvents.push({ k: 'saw', x: +from.x.toFixed(1), y: +from.y.toFixed(1), z: +from.z.toFixed(1) });
+    }
+    // the release is the laugh; the explosion only fires if it CONNECTS
+    sfx.sawLaugh(THREE.MathUtils.clamp(1.4 - from.distanceTo(this.player.position) / 60, 0.2, 1.2));
+  }
+
+  /** the saw in flight: spins end over end, bites the first thing it reaches */
+  private updateThrownSaws(dt: number) {
+    for (const t of this.thrownSaws) {
+      if (t.dead) continue;
+      const step = SAW_THROW_SPEED * dt;
+      t.pos.addScaledVector(t.dir, step);
+      t.travelled += step;
+      t.spin += dt * 34;
+      if (t.mesh) {
+        t.mesh.position.copy(t.pos);
+        t.mesh.rotation.set(0, Math.atan2(t.dir.x, t.dir.z), 0);
+        t.mesh.rotateX(t.spin);
+      }
+      this.effects.bladeFire(t.pos, t.pos, 1, 1);
+
+      let hit: Vehicle | null = null;
+      for (const e of this.vehicles) {
+        if (e === t.owner || !e.alive) continue;
+        if (e.position.distanceToSquared(t.pos) < SAW_HIT_RADIUS * SAW_HIT_RADIUS) { hit = e; break; }
+      }
+      if (hit) {
+        // ARMOR-PIERCING, like the nuke and for the same reason: it is the
+        // payoff for a long exposed charge and must not be worst against a heavy
+        const killed = hit.takeDamage(SAW_DAMAGE, t.owner, this.time, true);
+        _v1.copy(hit.position).sub(t.pos).normalize();
+        _v1.y = 0.5;
+        _v1.normalize();
+        const imp = 7 * hit.body.mass();
+        hit.body.applyImpulse({ x: _v1.x * imp, y: _v1.y * imp, z: _v1.z * imp }, true);
+        this.effects.sawSlam(t.pos, t.dir);
+        this.effects.sparks(hit.position, 26, 0xffb060);
+        sfx.explosion(THREE.MathUtils.clamp(1.3 - hit.position.distanceTo(this.player.position) / 60, 0.25, 1.1));
+        this.effects.trauma = Math.min(1, this.effects.trauma + 0.35);
+        if (hit === this.player) this.hud.showDamage(0.6);
+        if (t.owner === this.player) this.hud.showHitmarker();
+        if (killed) this.onKill(t.owner, hit);
+        t.dead = true;
+      } else if (t.travelled > SAW_THROW_RANGE) {
+        t.dead = true;
+      }
+      if (t.dead) {
+        // straight back to his hand: he is defenceless without it, the charge is
+        // already spent, and making him wait twice is pure downtime
+        if (t.mesh) this.scene.remove(t.mesh);
+        t.owner.retrieveSaw?.();
+        t.owner.sawThrown = false;
+      }
+    }
+    this.thrownSaws = this.thrownSaws.filter((t) => !t.dead);
   }
 
   private tickDash(v: Vehicle, dt: number) {
@@ -1986,24 +2059,32 @@ export class Game {
       // swing is a game event with a timer, not a function of the body's state.
       if (v.sawArm && v.sawBar) {
         const g = v.sawGrind;
-        const lerp3 = (a: readonly number[], b: readonly number[], k: number) =>
-          v.sawArm!.rotation.set(
-            a[0] + (b[0] - a[0]) * k,
-            a[1] + (b[1] - a[1]) * k,
-            a[2] + (b[2] - a[2]) * k);
+        const bn = v.bones;
+        // offsets from the REST pose, never absolute: writing absolute rotations
+        // destroys the rig and the skinned mesh renders as nothing
+        const arm = (x: number, y: number, z: number, elbow: number) => {
+          poseBone(bn?.armL ?? null, x, y, z);
+          poseBone(bn?.foreArmL ?? null, elbow);
+        };
+        const lerp3 = (a: readonly number[], c: readonly number[], k: number) =>
+          arm(a[0] + (c[0] - a[0]) * k, a[1] + (c[1] - a[1]) * k,
+              a[2] + (c[2] - a[2]) * k, a[3] + (c[3] - a[3]) * k);
         if (v.sawSwing > 0) {
           // THE WHIP, and it comes from ABOVE: the blade leaves the road, goes
           // up over his shoulder, then chops down across the front of the bike.
           // A flat sweep was the first version and read as a cricket shot.
           const t = 1 - v.sawSwing / SAW_SWING_TIME;
-          if (t < 0.3) lerp3(SAW_GRIND, SAW_RAISE, t / 0.3);          // snatch it up
-          else lerp3(SAW_RAISE, SAW_STRIKE, Math.min(1, (t - 0.3) / 0.45));  // and down
+          // wind up over the shoulder, then hurl it forward
+          if (t < 0.35) lerp3(SAW_GRIND, SAW_RAISE, t / 0.35);
+          else lerp3(SAW_RAISE, SAW_STRIKE, Math.min(1, (t - 0.35) / 0.4));
         } else {
           // rest → grind. The wheelie angle is subtracted because this arm is a
           // child of the node that pitches the bike: without it the blade points
           // skyward exactly when it is supposed to be cutting tarmac.
           lerp3(SAW_REST, SAW_GRIND, g);
-          v.sawArm.rotation.x -= g * SAW_WHEELIE_ANGLE;
+          // the arm hangs inside the node that pitches the bike, so without this
+          // the blade rises with the nose and grinds thin air
+          if (bn?.armL) bn.armL.rotation.x -= g * SAW_WHEELIE_ANGLE;   // stay level with the road
         }
         // the chain only runs when it is working
         if (g > 0.02 || v.sawSwing > 0) v.sawBar.rotation.z += dt * (26 + g * 40);

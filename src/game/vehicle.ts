@@ -85,6 +85,12 @@ export class Vehicle {
   sawArm: THREE.Object3D | null = null;
   sawBar: THREE.Object3D | null = null;
   sawHand: THREE.Object3D | null = null;
+  /** REAPER only — the generated rider's resolved skeleton */
+  bones: import('../render/riderRig').RiderBones | null = null;
+  /** REAPER only — true while the saw is in the air */
+  sawThrown = false;
+  releaseSaw: (() => THREE.Object3D | null) | null = null;
+  retrieveSaw: (() => void) | null = null;
   idleArm: THREE.Object3D | null = null;
   rider: THREE.Object3D | null = null;
   shieldMesh: THREE.Mesh | null = null;
@@ -523,6 +529,7 @@ export class Vehicle {
     this.sawGrind = 0;
     this.sawSwing = 0;
     this.sawWasHeld = false;
+    if (this.sawThrown) { this.retrieveSaw?.(); this.sawThrown = false; }
     this.body.setTranslation({ x: pos.x, y: pos.y, z: pos.z }, true);
     this.body.setRotation(quatFromYaw(yaw), true);
     this.body.setLinvel({ x: 0, y: 0, z: 0 }, true);
