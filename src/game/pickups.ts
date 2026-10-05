@@ -2,9 +2,10 @@ import * as THREE from 'three';
 import type { Vehicle } from './vehicle';
 import { buildRocket } from '../render/rocket';
 import { buildMine } from '../render/mine';
-import { MAX_MISSILES, MAX_MINES } from './specs';
+import { buildNuke } from '../render/nuke';
+import { MAX_MISSILES, MAX_MINES, MAX_NUKES } from './specs';
 
-export type PickupType = 'health' | 'missiles' | 'turbo' | 'shield' | 'overdrive' | 'mines' | 'special';
+export type PickupType = 'health' | 'missiles' | 'turbo' | 'shield' | 'overdrive' | 'mines' | 'special' | 'nuke';
 
 const RESPAWN_TIME: Record<PickupType, number> = {
   health: 11,
@@ -14,16 +15,19 @@ const RESPAWN_TIME: Record<PickupType, number> = {
   overdrive: 22,
   mines: 14,
   special: 16,
+  nuke: 34,
 };
 
 /** canonical order — index is what goes over the wire for guest sync */
-export const PICKUP_TYPE_ORDER: PickupType[] = ['health', 'missiles', 'turbo', 'shield', 'overdrive', 'mines', 'special'];
+// APPEND new types — the index is the wire format, so reordering desyncs guests
+export const PICKUP_TYPE_ORDER: PickupType[] = ['health', 'missiles', 'turbo', 'shield', 'overdrive', 'mines', 'special', 'nuke'];
 
 /** respawn shuffle pool: sockets cycle types so locations can't be farmed by
  *  memory. Weighted — offense stays most common; overdrive never shuffles in
  *  (it keeps its dedicated roaming socket). */
 const SHUFFLE_POOL: [PickupType, number][] = [
   ['missiles', 28], ['health', 22], ['turbo', 16], ['mines', 14], ['special', 12], ['shield', 8],
+  ['nuke', 3],   // deliberately rare: one lands roughly every 35th respawn
 ];
 function rollShuffleType(): PickupType {
   let total = 0;
@@ -63,6 +67,7 @@ export const PICKUP_COLORS: Record<PickupType, number> = {
   overdrive: 0xff44dd, // reserved magenta
   mines: 0x9a9aa6,     // Graphite trim (body is dark, red dot is the signal)
   special: 0xc94dff,   // Special violet — matches the special-meter bar
+  nuke: 0xaaff00,      // Hazard Lime — the only lime beacon on the map
 };
 const COLORS = PICKUP_COLORS;
 
@@ -188,6 +193,12 @@ function buildPickupMesh(type: PickupType): THREE.Group {
     );
     halo.rotation.x = Math.PI / 2.6;
     core.add(halo);
+  } else if (type === 'nuke') {
+    // the shared warhead, nose-up, leaning back on its fins the way it sits in
+    // a cradle — identical to the one on your deck and the one in flight
+    core = buildNuke();
+    core.rotation.z = -0.3;
+    core.position.y = 0.1;
   } else {
     // the shared mine — identical to the clamps on your bumper and to one armed
     // in the road
@@ -304,6 +315,7 @@ export class PickupManager {
           if (p.type === 'turbo' && v.turboMeter >= v.spec.turboMax - 0.1) continue;
           if (p.type === 'mines' && v.minesAmmo >= MAX_MINES) continue;
           if (p.type === 'special' && v.specialEnergy >= 1) continue;
+          if (p.type === 'nuke' && v.nukes >= MAX_NUKES) continue;
           p.active = false;
           // ±30% jitter so respawn timers can't be memorized and camped
           p.timer = RESPAWN_TIME[p.type] * (0.7 + Math.random() * 0.6);

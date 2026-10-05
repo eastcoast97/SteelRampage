@@ -1,7 +1,8 @@
 import * as THREE from 'three';
-import { MAX_MISSILES, MAX_MINES, type CarSpec } from '../game/specs';
+import { MAX_MISSILES, MAX_MINES, MAX_NUKES, type CarSpec } from '../game/specs';
 import { buildRocket } from './rocket';
 import { buildMine } from './mine';
+import { buildNuke } from './nuke';
 
 /**
  * Visible ammunition carried on the car.
@@ -25,7 +26,9 @@ export interface Loadout {
   missileMuzzle(index: number, out: THREE.Vector3): THREE.Vector3;
   /** world position of the next mine to fall off the bumper */
   mineAnchor(index: number, out: THREE.Vector3): THREE.Vector3;
-  sync(missiles: number, mines: number): void;
+  /** world position of the warhead in its cradle */
+  nukeMuzzle(out: THREE.Vector3): THREE.Vector3;
+  sync(missiles: number, mines: number, nukes: number): void;
 }
 
 const railMat = new THREE.MeshStandardMaterial({ color: 0x3a3742, roughness: 0.65, metalness: 0.55 });
@@ -90,16 +93,41 @@ export function buildLoadout(spec: CarSpec, roofY: number, hoodY: number): Loado
     mines.push(m);
   }
 
-  const sync = (nMissiles: number, nMines: number) => {
+  // --- the nuke: one warhead, strapped high on the rear deck in a cradle ---
+  // Above the missile rail rather than beside it. You are carrying ONE of these
+  // and everyone else needs to be able to see that from across the arena, which
+  // a tube lost among three others would not do.
+  const nukeY = rackY + 0.46;
+  const cradle = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.14, 0.9), railMat);
+  cradle.position.set(0, nukeY - 0.3, rackZ - 0.12);
+  cradle.castShadow = true;
+  group.add(cradle);
+
+  const nukes: THREE.Object3D[] = [];
+  for (let i = 0; i < MAX_NUKES; i++) {
+    const holder = new THREE.Group();
+    const n = buildNuke();              // no plume — it is not burning on the rack
+    n.rotation.x = -Math.PI / 2;        // nose +Y becomes nose -Z
+    holder.add(n);
+    holder.position.set(0, nukeY, rackZ - 0.12);
+    holder.visible = false;
+    group.add(holder);
+    nukes.push(holder);
+  }
+
+  const sync = (nMissiles: number, nMines: number, nNukes: number) => {
     for (let i = 0; i < missiles.length; i++) missiles[i].visible = i < nMissiles;
     for (let i = 0; i < mines.length; i++) mines[i].visible = i < nMines;
+    for (let i = 0; i < nukes.length; i++) nukes[i].visible = i < nNukes;
     // the rack only makes sense when something is on it
     rail.visible = nMissiles > 0;
+    cradle.visible = nNukes > 0;
   };
-  sync(0, 0);
+  sync(0, 0, 0);
 
   return {
     group, missiles, mines, sync,
+    nukeMuzzle: (out) => nukes[0].getWorldPosition(out),
     missileMuzzle: (index, out) => {
       const m = missiles[Math.max(0, Math.min(missiles.length - 1, index))];
       return m.getWorldPosition(out);

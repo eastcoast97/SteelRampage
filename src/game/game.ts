@@ -5,10 +5,11 @@ import { Vehicle } from './vehicle';
 import { BotController } from './bots';
 import { PickupManager, PICKUP_COLORS, type PickupType } from './pickups';
 import { PedManager } from './peds';
-import { CAR_SPECS, BOT_NAMES, MAX_MISSILES, MAX_MINES, type CarSpec } from './specs';
+import { CAR_SPECS, BOT_NAMES, MAX_MISSILES, MAX_MINES, MAX_NUKES, type CarSpec } from './specs';
 import { buildCarMesh, makeContactShadow } from '../render/carMesh';
 import { buildRocket } from '../render/rocket';
 import { buildMine } from '../render/mine';
+import { buildNuke } from '../render/nuke';
 import { Effects } from '../render/effects';
 import { Hud } from '../ui/hud';
 import { sfx } from '../audio/sfx';
@@ -47,6 +48,17 @@ const MINE_DAMAGE = 24;
 const MINE_RADIUS = 5.5;
 const BARREL_DAMAGE = 24;
 const BARREL_RADIUS = 6.5;
+// APEX tier, above the locked missile and deliberately outside the normal
+// hierarchy: rare, one-shot, pickup-only. ARMOR-PIERCING (see Vehicle.takeDamage)
+// so it always takes about half the bar — mitigated it would be half a VIPER and
+// a sixth of a JUGGERNAUT, which is the opposite of what it is for.
+const NUKE_DAMAGE = 48;
+const NUKE_RADIUS = 22;
+const NUKE_SPEED = 30;           // slow and flat — it has to be dodgeable
+// A fat slow bomb needs a wider fuse than a missile, and the full-damage band
+// must track it: fuse OUTSIDE the band means a hit the fuse called direct still
+// gets scaled down, and the weapon quietly never deals its stated damage.
+const NUKE_FUSE = 3.2;
 const SPECIAL_CAP = 29;          // 0.85 × locked missile — specials can never exceed it
 /** seconds between bursts while a 45s special window is open */
 const SPECIAL_RETRIGGER: Record<string, number> = {
@@ -88,6 +100,8 @@ interface Missile {
   mesh: THREE.Group;
   smokeAcc: number;
   dead: boolean;
+  /** rides the same projectile loop, but unguided, slower and far bigger */
+  isNuke?: boolean;
 }
 
 interface Mine {
@@ -467,6 +481,7 @@ export class Game {
       this.player.input.fireMissile = input.fireMissile;
       this.player.input.dropMine = input.dropMine;
       this.player.input.special = input.consumeSpecial();
+      if (input.consumeNuke()) this.player.input.fireNuke = true;
       if (input.consumeFlip()) this.player.unflip();
 
       // never fail silently: shake the ammo chip when firing on empty
@@ -477,6 +492,9 @@ export class Game {
           this.denyCooldown = 0.6;
         } else if (input.dropMine && this.player.minesAmmo <= 0) {
           this.hud.deny('mine');
+          this.denyCooldown = 0.6;
+        } else if (this.player.input.fireNuke && this.player.nukes <= 0) {
+          this.hud.deny('nuke');
           this.denyCooldown = 0.6;
         }
       }
@@ -502,6 +520,12 @@ export class Game {
       if (v.input.fireMG && v.mgCooldown <= 0) this.fireMG(v);
       if (v.input.fireMissile && v.missileCooldown <= 0 && v.missiles > 0) this.fireMissile(v);
       if (v.input.dropMine && v.mineCooldown <= 0 && v.minesAmmo > 0) this.dropMine(v);
+      if (v.input.fireNuke) {
+        // self-clearing: the flag is one press however it arrived (local key,
+        // bot, or a remote guest), so a stuck input can never spend two nukes
+        v.input.fireNuke = false;
+        if (v.nukes > 0 && v.nukeCooldown <= 0) this.fireNuke(v);
+      }
       this.handleSpecial(v, dt);
       if (v.position.y < -8) this.respawn(v);
     }
@@ -739,13 +763,51 @@ export class Game {
     if (v === this.player || v.position.distanceTo(this.player.position) < 50) sfx.missileLaunch();
   }
 
+  private fireNuke(v: Vehicle) {
+    v.nukes--;
+    v.nukeCooldown = 0.8;
+    v.spawnProtection = 0;
+    const fwd = v.forward;
+    const up = new THREE.Vector3(0, 1, 0).applyQuaternion(v.quaternion);
+    // leaves the cradle it was sitting in, then drops to bonnet height so the
+    // launch arc starts where the warhead visibly was
+    const pos = v.loadout
+      ? v.loadout.nukeMuzzle(new THREE.Vector3())
+          .addScaledVector(fwd, v.spec.size.z * 1.2)
+          .addScaledVector(up, -0.3)
+      : v.position.addScaledVector(fwd, v.spec.size.z + 1.2).addScaledVector(up, 0.5);
+
+    const mesh = new THREE.Group();
+    const warhead = buildNuke({ plume: true });
+    warhead.rotation.x = -Math.PI / 2;
+    mesh.add(warhead);
+    mesh.position.copy(pos);
+    this.scene.add(mesh);
+
+    this.missiles.push({
+      pos: pos.clone(),
+      vel: fwd.clone().multiplyScalar(Math.max(18, v.forwardSpeed + 10)),
+      target: null,                // unguided on purpose: it is an area denial
+      owner: v,                    // weapon, not a sniper rifle
+      life: 6,
+      mesh,
+      smokeAcc: 0,
+      dead: false,
+      isNuke: true,
+    });
+    if (v === this.player) this.hud.toast('NUKE AWAY', '#aaff00');
+    sfx.missileLaunch();
+  }
+
   private updateMissiles(dt: number) {
     for (const m of this.missiles) {
       if (m.dead) continue;
       m.life -= dt;
       if (m.life <= 0) { this.explodeMissile(m, m.pos); continue; }
 
-      const speed = Math.min(46, m.vel.length() + 55 * dt);
+      const speed = m.isNuke
+        ? Math.min(NUKE_SPEED, m.vel.length() + 24 * dt)
+        : Math.min(46, m.vel.length() + 55 * dt);
       const dir = _v1.copy(m.vel).normalize();
       if (m.target && m.target.alive) {
         _v2.copy(m.target.position).setY(m.target.position.y + 0.2).sub(m.pos).normalize();
@@ -766,7 +828,8 @@ export class Game {
       let boom = false;
       for (const v of this.vehicles) {
         if (v === m.owner || !v.alive) continue;
-        if (v.position.distanceToSquared(m.pos) < 2.3 * 2.3) {
+        const fuse = m.isNuke ? NUKE_FUSE : 2.3;
+        if (v.position.distanceToSquared(m.pos) < fuse * fuse) {
           this.explodeMissile(m, m.pos.clone());
           boom = true;
           break;
@@ -800,6 +863,17 @@ export class Game {
   private explodeMissile(m: Missile, at: THREE.Vector3) {
     m.dead = true;
     this.scene.remove(m.mesh);
+    if (m.isNuke) {
+      // no overdrive multiplier: overdrive scales the weapons you use over and
+      // over, and 48 piercing is already the ceiling of the whole game
+      this.explosionAt(at, NUKE_DAMAGE, NUKE_RADIUS, m.owner, true, true, NUKE_FUSE + 0.2);
+      // whiteout and shake fall off with distance — a nuke across the map
+      // should register without blinding you
+      const near = THREE.MathUtils.clamp(1 - at.distanceTo(this.player.position) / 110, 0, 1);
+      this.effects.trauma = Math.min(1, this.effects.trauma + 0.55 + near * 0.45);
+      this.hud.blast(0.35 + near * 0.65);
+      return;
+    }
     // locked missiles hit harder — locking on is the skill being rewarded
     const base = m.target ? MISSILE_DAMAGE_LOCKED : MISSILE_DAMAGE_DUMB;
     const dmg = base * (m.owner.overdriveTime > 0 ? 1.5 : 1);
@@ -1210,7 +1284,7 @@ export class Game {
   }
 
   /** unified AoE: damages vehicles, shoves bodies, chains barrels, does FX */
-  private explosionAt(at: THREE.Vector3, damage: number, radius: number, owner: Vehicle | null, big: boolean) {
+  private explosionAt(at: THREE.Vector3, damage: number, radius: number, owner: Vehicle | null, big: boolean, pierce = false, directR = 2.6) {
     if (this.netOpts?.role === 'host') {
       this.netEvents.push({ k: 'boom', x: +at.x.toFixed(1), y: +at.y.toFixed(1), z: +at.z.toFixed(1), big: big ? 1 : 0 });
     }
@@ -1223,9 +1297,10 @@ export class Game {
       const d = v.position.distanceTo(at);
       if (d > radius) continue;
       // direct hits (proximity-fused on the victim) take full damage —
-      // keeps a landed missile above the special-damage cap
-      const falloff = d < 2.6 ? 1 : 1 - (d / radius) * 0.65;
-      const killed = v.takeDamage(damage * falloff, owner, this.time);
+      // keeps a landed missile above the special-damage cap. `directR` must be
+      // at least the weapon's fuse radius or a fused hit is not a direct hit.
+      const falloff = d < directR ? 1 : 1 - (d / radius) * 0.65;
+      const killed = v.takeDamage(damage * falloff, owner, this.time, pierce);
       _v1.copy(v.position).sub(at).normalize().add(new THREE.Vector3(0, 0.6, 0));
       const imp = 5 * v.body.mass() * falloff; // mass-normalized — same shove at any vehicle scale
       v.body.applyImpulse({ x: _v1.x * imp, y: _v1.y * imp, z: _v1.z * imp }, true);
@@ -1632,6 +1707,7 @@ export class Game {
     else if (type === 'shield') v.shieldTime = 10;  // exactly 10s of full immunity
     else if (type === 'overdrive') v.overdriveTime = 8;
     else if (type === 'special') v.specialEnergy = Math.min(1, v.specialEnergy + 0.25);
+    else if (type === 'nuke') v.nukes = Math.min(MAX_NUKES, v.nukes + 1);
     else v.minesAmmo = Math.min(MAX_MINES, v.minesAmmo + 2);
     if (this.netOpts?.role === 'host' && !v.isBot) {
       this.netEvents.push({ k: 'pick', vi: this.vehicles.indexOf(v), item: type });
@@ -1646,6 +1722,7 @@ export class Game {
         overdrive: ['OVERDRIVE!', '#ff44dd'],
         mines: ['+2 MINES', '#c9c9d4'],
         special: ['+25% SPECIAL', '#c94dff'],
+        nuke: ['NUKE ARMED', '#aaff00'],
       };
       this.hud.toast(...toasts[type]);
     }

@@ -7,6 +7,7 @@
  */
 export const MAX_MISSILES = 3;
 export const MAX_MINES = 6;
+export const MAX_NUKES = 1;
 
 export type SpecialId = 'dash' | 'minigun' | 'flame' | 'turret' | 'slam' | 'bomb' | 'repair' | 'minetrail';
 

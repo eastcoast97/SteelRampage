@@ -2,6 +2,7 @@ import type { Vehicle } from '../game/vehicle';
 import type { Game } from '../game/game';
 import { MODES } from '../game/game';
 import { STREETS, ARCS, ROUNDABOUT, STREETS_DOCKS } from '../game/arena';
+import { MAX_MISSILES, MAX_MINES, MAX_NUKES } from '../game/specs';
 
 const $ = (id: string) => document.getElementById(id)!;
 const THREE_clamp = (v: number, a: number, b: number) => Math.max(a, Math.min(b, v));
@@ -13,6 +14,8 @@ export class Hud {
   private specialLabel = $('special-label');
   private missileCount = $('missile-count');
   private mineCount = $('mine-count');
+  private nukeCount = $('nuke-count');
+  private blastFlash = $('blast-flash');
   private scoreboard = $('scoreboard');
   private killfeed = $('killfeed');
   private lockIndicator = $('lock-indicator');
@@ -28,6 +31,8 @@ export class Hud {
 
   private hitmarkerTimer = 0;
   private vignetteLevel = 0;
+  private blastLevel = 0;
+  private lastNukes = -1;
   private lastMissiles = -1;
   private lastMines = -1;
   private radarMap: HTMLCanvasElement | null = null;
@@ -109,15 +114,19 @@ export class Hud {
     }
 
     // capacity shown inline — no center-screen announcements needed
-    this.missileCount.textContent = `🚀 ${player.missiles}/3`;
-    this.mineCount.textContent = `💣 ${player.minesAmmo}/6`;
+    this.missileCount.textContent = `🚀 ${player.missiles}/${MAX_MISSILES}`;
+    this.mineCount.textContent = `💣 ${player.minesAmmo}/${MAX_MINES}`;
+    this.nukeCount.textContent = `☢ ${player.nukes}/${MAX_NUKES}`;
     this.missileCount.style.opacity = player.missiles > 0 ? '1' : '0.35';
     this.mineCount.style.opacity = player.minesAmmo > 0 ? '1' : '0.35';
+    this.nukeCount.style.opacity = player.nukes > 0 ? '1' : '0.3';
     // acquire punch on counter increase
     if (player.missiles > this.lastMissiles && this.lastMissiles >= 0) this.pulse(this.missileCount, 'punch');
     if (player.minesAmmo > this.lastMines && this.lastMines >= 0) this.pulse(this.mineCount, 'punch');
+    if (player.nukes > this.lastNukes && this.lastNukes >= 0) this.pulse(this.nukeCount, 'punch');
     this.lastMissiles = player.missiles;
     this.lastMines = player.minesAmmo;
+    this.lastNukes = player.nukes;
 
     // status chips
     const chips: string[] = [];
@@ -176,6 +185,11 @@ export class Hud {
     if (this.vignetteLevel > 0) {
       this.vignetteLevel = Math.max(0, this.vignetteLevel - dt * 1.8);
       this.vignette.style.opacity = String(this.vignetteLevel);
+    }
+
+    if (this.blastLevel > 0) {
+      this.blastLevel = Math.max(0, this.blastLevel - dt * 1.15);
+      this.blastFlash.style.opacity = String(this.blastLevel * this.blastLevel);
     }
 
     if (!player.alive && !player.eliminated) {
@@ -364,8 +378,15 @@ export class Hud {
   }
 
   /** shake the ammo chip when the player fires on empty */
-  deny(kind: 'missile' | 'mine') {
-    this.pulse(kind === 'missile' ? this.missileCount : this.mineCount, 'deny');
+  deny(kind: 'missile' | 'mine' | 'nuke') {
+    const el = kind === 'missile' ? this.missileCount : kind === 'mine' ? this.mineCount : this.nukeCount;
+    this.pulse(el, 'deny');
+  }
+
+  /** detonation whiteout — scaled by how close the player was to the blast */
+  blast(intensity: number) {
+    this.blastLevel = Math.min(1, this.blastLevel + intensity);
+    this.blastFlash.style.opacity = String(this.blastLevel);
   }
 
   /** big, unmissable center-screen announcement (pickups, specials) */

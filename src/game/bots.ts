@@ -159,6 +159,7 @@ export class BotController {
     v.input.fireMissile = false;
     v.input.dropMine = false;
     v.input.special = false;
+    v.input.fireNuke = false;
     // drop a mine when someone is chasing close behind
     if (v.minesAmmo > 0 && v.mineCooldown <= 0) {
       for (const e of vehicles) {
@@ -188,6 +189,14 @@ export class BotController {
       // missiles when locked
       if (v.missiles > 0 && v.lockTarget && tDist < 70 && Math.random() < this.aggression * 0.9) {
         v.input.fireMissile = true;
+      }
+
+      // the nuke: unguided and slow, so it wants a target lined up and far
+      // enough out that the shot has time to arrive. Edge-triggered — set it
+      // for one frame and let the game clear it.
+      if (v.nukes > 0 && v.nukeCooldown <= 0 && tDist > 16 && tDist < 85
+          && facing > 0.95 && Math.random() < this.aggression * 0.06) {
+        v.input.fireNuke = true;
       }
 
       // special weapon usage — per-archetype heuristics
@@ -242,6 +251,12 @@ export class BotController {
     if (v.health < v.spec.maxHealth * 0.4) {
       const p = pickups.nearestActive('health', v.position);
       if (p && p.distanceTo(v.position) < 90) { this.goalPickup = p; return; }
+    }
+    // a nuke is worth crossing the map for — it is the rarest thing out there
+    // and a bot sitting on one is the only reason a JUGGERNAUT ever fears anything
+    if (v.nukes <= 0) {
+      const p = pickups.nearestActive('nuke', v.position);
+      if (p && p.distanceTo(v.position) < 140) { this.goalPickup = p; return; }
     }
     if (v.missiles === 0 && Math.random() < 0.7) {
       const p = pickups.nearestActive('missiles', v.position);

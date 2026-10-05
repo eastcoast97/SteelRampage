@@ -257,6 +257,15 @@ html, body {
   background: radial-gradient(ellipse at center, transparent 55%, rgba(255,0,30,0.5) 100%);
 }
 
+/* nuke detonation whiteout — additive-looking wash that decays over ~0.9s */
+#blast-flash {
+  position: absolute; inset: 0; pointer-events: none;
+  background: radial-gradient(ellipse at center, rgba(245,255,220,0.95) 0%, rgba(190,255,70,0.5) 45%, rgba(120,180,20,0) 85%);
+  opacity: 0;
+}
+
+#nuke-count { color: #aaff00; }
+
 #respawn-overlay {
   position: absolute; inset: 0;
   display: flex; flex-direction: column; align-items: center; justify-content: center;

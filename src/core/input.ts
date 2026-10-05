@@ -6,6 +6,7 @@ export class Input {
   pauseToggled = false;
   /** edge-triggered: true for exactly one consume after each press */
   specialPressed = false;
+  nukePressed = false;
 
   constructor() {
     window.addEventListener('keydown', (e) => {
@@ -15,17 +16,21 @@ export class Input {
       if (e.code === 'KeyM') this.muteToggled = true;
       if (e.code === 'Escape') this.pauseToggled = true;
       if (e.code === 'KeyE') this.specialPressed = true;
+      if (e.code === 'KeyC') this.nukePressed = true;
       if (['Space', 'ArrowUp', 'ArrowDown'].includes(e.code)) e.preventDefault();
     });
     window.addEventListener('keyup', (e) => this.keys.delete(e.code));
     window.addEventListener('mousedown', (e) => {
       this.mouseButtons.add(e.button);
       if (e.button === 2) this.specialPressed = true;
+      if (e.button === 1) this.nukePressed = true;
     });
     window.addEventListener('mouseup', (e) => this.mouseButtons.delete(e.button));
     window.addEventListener('contextmenu', (e) => e.preventDefault());
     window.addEventListener('blur', () => {
       this.keys.clear();
+      this.nukePressed = false;
+      this.specialPressed = false;
       this.mouseButtons.clear();
     });
   }
@@ -57,6 +62,10 @@ export class Input {
   /** one-shot per press — holding the button must NOT re-trigger (a held
    *  special would e.g. instantly detonate a just-launched remote bomb) */
   consumeSpecial() { const s = this.specialPressed; this.specialPressed = false; return s; }
+
+  /** likewise one-shot: you carry a single nuke and a held key must not spend
+   *  it the instant you pick the next one up */
+  consumeNuke() { const n = this.nukePressed; this.nukePressed = false; return n; }
 
   consumeFlip() { const f = this.flipRequested; this.flipRequested = false; return f; }
   consumeMute() { const m = this.muteToggled; this.muteToggled = false; return m; }

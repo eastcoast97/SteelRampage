@@ -79,6 +79,7 @@ export function serializeSnapshot(g: Game): any {
       v.missiles, v.minesAmmo, r1(v.turboMeter), v.lives,
       r1(v.specialActiveTime), v.killStreak, r1(v.specialWindow),
       v.lastInputTs,   // echo: lets that guest measure its own round-trip time
+      v.nukes,         // a[25] — drives the guest's own HUD chip and deck warhead
     ];
   });
   const mis = g.missiles.filter((m) => !m.dead).map((m) => [r1(m.pos.x), r1(m.pos.y), r1(m.pos.z), r1(m.vel.x), r1(m.vel.y), r1(m.vel.z)]);
@@ -319,6 +320,7 @@ export class GuestSync {
           health: ['+40 ARMOR', '#ffffff'], missiles: ['+1 MISSILE', '#ff6a1a'],
           turbo: ['TURBO REFILLED', '#ffe44d'], shield: ['SHIELD ACTIVE', '#8fa5ff'],
           overdrive: ['OVERDRIVE!', '#ff44dd'], mines: ['+2 MINES', '#c9c9d4'],
+          nuke: ['NUKE ARMED', '#aaff00'],
         };
         const t = toasts[e.item];
         if (t) g.hud.toast(...t);
@@ -365,6 +367,7 @@ export class GuestSync {
       v.specialActiveTime = a[21];
       v.killStreak = a[22] ?? 0;
       v.specialWindow = a[23] ?? 0;
+      v.nukes = a[25] ?? 0;
       v.eliminated = !!(flags & 16);
       v.overdriveTime = flags & 32 ? 1 : 0;
       v.drifting = !!(flags & 64);

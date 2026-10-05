@@ -11,6 +11,9 @@ export interface VehicleInput {
   fireMissile: boolean;
   dropMine: boolean;
   special: boolean;
+  /** edge-triggered: set true for ONE step per press. A nuke is a single shot
+   *  and a held key must never spend it twice. */
+  fireNuke: boolean;
 }
 
 const GRAVITY = 25;
@@ -45,7 +48,7 @@ export class Vehicle {
   alive = true;
   respawnTimer = 0;
 
-  input: VehicleInput = { throttle: 0, steer: 0, handbrake: false, turbo: false, fireMG: false, fireMissile: false, dropMine: false, special: false };
+  input: VehicleInput = { throttle: 0, steer: 0, handbrake: false, turbo: false, fireMG: false, fireMissile: false, dropMine: false, special: false, fireNuke: false };
 
   mgCooldown = 0;
   missileCooldown = 0;
@@ -57,6 +60,8 @@ export class Vehicle {
   shieldTime = 0;
   overdriveTime = 0;
   minesAmmo = 0;
+  nukes = 0;
+  nukeCooldown = 0;
   shieldMesh: THREE.Mesh | null = null;
   /** flare timer — the bubble flashes when it eats a hit */
   shieldFlash = 0;
@@ -108,9 +113,10 @@ export class Vehicle {
   /** body + bolted kit, leaned independently of the wheels (see syncVisual) */
   chassis: THREE.Object3D | null = null;
   /** visible carried ammo; kept in step with missiles/minesAmmo every frame */
-  loadout: { sync(missiles: number, mines: number): void;
+  loadout: { sync(missiles: number, mines: number, nukes: number): void;
              missileMuzzle(i: number, out: THREE.Vector3): THREE.Vector3;
-             mineAnchor(i: number, out: THREE.Vector3): THREE.Vector3 } | null = null;
+             mineAnchor(i: number, out: THREE.Vector3): THREE.Vector3;
+             nukeMuzzle(out: THREE.Vector3): THREE.Vector3 } | null = null;
   private leanRoll = 0;
   private leanPitch = 0;
   private lastVisualSpeed = 0;
@@ -395,6 +401,7 @@ export class Vehicle {
     // cooldowns & power-up timers
     this.mgCooldown = Math.max(0, this.mgCooldown - dt);
     this.missileCooldown = Math.max(0, this.missileCooldown - dt);
+    this.nukeCooldown = Math.max(0, this.nukeCooldown - dt);
     this.mineCooldown = Math.max(0, this.mineCooldown - dt);
     this.spawnProtection = Math.max(0, this.spawnProtection - dt);
     this.shieldTime = Math.max(0, this.shieldTime - dt);
@@ -427,12 +434,19 @@ export class Vehicle {
     this.flippedTime = 0;
   }
 
-  takeDamage(amount: number, attacker: Vehicle | null, now: number): boolean {
+  /**
+   * `pierce` skips armor mitigation entirely — the one documented exception to
+   * "mitigate in exactly one place" (docs/BALANCE.md), and only the nuke uses
+   * it. A fixed fraction of the bar against everyone is the whole point of the
+   * weapon: mitigated, 48 raw takes half of a VIPER and a sixth of a
+   * JUGGERNAUT, and it stops being the thing you save for the heavy.
+   */
+  takeDamage(amount: number, attacker: Vehicle | null, now: number, pierce = false): boolean {
     if (!this.alive || this.spawnProtection > 0) return false;
     if (this.shieldTime > 0) { this.shieldFlash = 0.18; return false; } // shield = untouchable, flare on impact
     // armor mitigation: percentage reduction with diminishing returns.
     // effectiveHP = 100 * (1 + armor/100); armor never zeroes out chip damage.
-    amount *= 100 / (100 + this.spec.armor);
+    if (!pierce) amount *= 100 / (100 + this.spec.armor);
     this.health -= amount;
     this.onDamage?.(this, amount, attacker);
     if (attacker && attacker !== this) {
@@ -466,6 +480,8 @@ export class Vehicle {
     this.shieldTime = 0;
     this.overdriveTime = 0;
     this.minesAmmo = 0;
+    this.nukes = 0;
+    this.nukeCooldown = 0;
     this.body.setTranslation({ x: pos.x, y: pos.y, z: pos.z }, true);
     this.body.setRotation(quatFromYaw(yaw), true);
     this.body.setLinvel({ x: 0, y: 0, z: 0 }, true);
@@ -489,7 +505,7 @@ export class Vehicle {
     if (!this.mesh) return;
     // Driven from the counts rather than from pickup/fire events, so it is
     // correct however the count changed — including a network snapshot.
-    this.loadout?.sync(this.missiles, this.minesAmmo);
+    this.loadout?.sync(this.missiles, this.minesAmmo, this.nukes);
     const t = this.body.translation();
     const r = this.body.rotation();
     this.mesh.position.set(t.x, t.y, t.z);

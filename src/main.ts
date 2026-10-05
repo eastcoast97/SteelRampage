@@ -333,6 +333,7 @@ async function boot() {
   let guestOverShown = false;
   const remoteInputs = new Map<number, any>();      // vehicle idx → latest guest input
   const remoteSpecial = new Set<number>();          // vehicle idx → pending special press
+  const remoteNuke = new Set<number>();            // likewise for the one-shot nuke
   const idToIdx = new Map<number, number>();        // client id → vehicle idx
   let snapshotAcc = 0;
 
@@ -426,6 +427,7 @@ async function boot() {
     guestSync = null;
     remoteInputs.clear();
     remoteSpecial.clear();
+    remoteNuke.clear();
     idToIdx.clear();
     updateLobbyUI();
     setOnlineStatus(message);
@@ -476,6 +478,7 @@ async function boot() {
         if (idx === undefined) return;
         remoteInputs.set(idx, m.d);
         if (m.d.sp) remoteSpecial.add(idx);
+        if (m.d.nk) remoteNuke.add(idx);
       });
       await net.connect();
       net.send({ t: 'create', name: playerName(), specId: selectedSpec.id });
@@ -712,6 +715,10 @@ async function boot() {
             v.input.special = true;
             remoteSpecial.delete(idx);
           }
+          if (remoteNuke.has(idx)) {
+            v.input.fireNuke = true;
+            remoteNuke.delete(idx);
+          }
         }
       }
       game.step(FIXED_DT, input);
@@ -746,6 +753,7 @@ async function boot() {
         d: {
           th: input.throttle, st: input.steer, hb: input.handbrake, tu: input.turbo,
           mg: input.fireMG, mi: input.fireMissile, mn: input.dropMine, sp: input.consumeSpecial(),
+          nk: input.consumeNuke(),
           ts: Math.round(performance.now()),
         },
       });
