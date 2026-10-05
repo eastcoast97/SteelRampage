@@ -213,17 +213,20 @@ export class BotController {
           (id === 'turret' && tDist < 40) ||
           (id === 'slam' && tDist < 9) ||
           (id === 'bomb' && facing > 0.7 && tDist < 30) ||
-          (id === 'repair' && v.health < v.spec.maxHealth * 0.55) ||
-          (id === 'chainsaw' && facing > 0.6 && tDist < 8)
+          (id === 'repair' && v.health < v.spec.maxHealth * 0.55)
         ) {
           v.input.special = true;
         }
       }
-      // REAPER: charge the saw by grinding when nothing is close enough to cut,
-      // then stop grinding and close in once the bar is full. A bot that kept
-      // holding it would wheelie straight past the target it just charged for.
+      // REAPER has no press-to-fire at all — see below.
       if (v.spec.specialId === 'chainsaw') {
-        v.input.specialHeld = v.specialEnergy < 1 && tDist > 18 && facing > 0.55;
+        // Releasing IS the swing, so a bot that let go the instant the bar
+        // filled would whip at nothing. It keeps holding once charged and only
+        // lets go when the target is actually inside the arc.
+        const inStrike = tDist < 8 && facing > 0.6;
+        v.input.specialHeld = v.specialEnergy < 1
+          ? (tDist > 12 && facing > 0.5)    // charging: needs a clear run
+          : !inStrike;                      // charged: hold until it is on top of them
       }
 
       // minigun special is only useful if actually shooting

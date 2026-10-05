@@ -83,6 +83,11 @@ const SAW_DAMAGE = 36;
 const SAW_RANGE = 9.5;
 const SAW_CHARGE_TIME = 5.0;     // seconds of continuous grinding for a full bar
 const SAW_GRIND_MIN_SPEED = 7;   // below this the blade is not biting
+const SAW_SWING_TIME = 0.45;
+const SAW_WHEELIE_ANGLE = 0.46;    // ~26 degrees of nose-up while grinding
+// arm poses, as [x, y, z] euler on the shoulder pivot
+const SAW_REST: [number, number, number] = [-0.6, 0.95, -0.15];     // held out right, levelled
+const SAW_GRIND: [number, number, number] = [0.95, 0.62, -0.1];     // tip on the tarmac
 const FLAME_DPS = 20;
 const TURRET_SHOT = 2.0;
 const MINIGUN_SHOT = 3.5;
@@ -333,6 +338,11 @@ export class Game {
     if ('sawArm' in built) {
       const r = built as ReaperResult;
       v.sawTip = r.sawTip;
+      v.setSawCharge = r.setCharge;
+      v.wheelieNode = r.wheelieNode;
+      v.frontSteer = r.frontSteer;
+      v.frontSpin = r.frontSpin;
+      v.rearSpin = r.rearSpin;
       v.sawArm = r.sawArm;
       v.sawBar = r.sawBar;
       v.rider = r.rider;
@@ -1061,13 +1071,15 @@ export class Game {
       v.specialEnergy = Math.min(1, v.specialEnergy + dt / SAW_CHARGE_TIME);
       v.sawGrind = Math.min(1, v.sawGrind + dt * 4);
       v.spawnProtection = 0;
-      // lift the nose by shoving UP at the front axle rather than torquing the
-      // body: an impulse at a point can't spin the bike if the suspension is
-      // already loaded, which a raw torque very much can
-      const front = _v2.copy(v.position).addScaledVector(v.forward, v.spec.size.z * 0.95);
-      const lift = 2.6 * v.body.mass() * dt;
-      v.body.applyImpulseAtPoint({ x: 0, y: lift, z: 0 },
-        { x: front.x, y: front.y, z: front.z }, true);
+
+      // THE WHEELIE IS VISUAL — see the render block. Two physics attempts went
+      // in the bin first: a single up-impulse at the front axle moved the nose
+      // half a degree (most of it went into lifting the whole bike rather than
+      // rotating it), and a proper up-front/down-rear couple with a PD
+      // controller looped the bike clean onto its back, because a 1.3m body this
+      // light has nothing like the inertia to ride out its own correction.
+      // The project already does weight transfer this way (phase 3.6: the rigid
+      // body barely rolls on purpose), and handling stays predictable.
       // the blade is eating the road
       if (v.sawTip) {
         const tip = v.sawTip(_v3);
@@ -1077,6 +1089,7 @@ export class Game {
       if (v === this.player) sfx.sawGrind(Math.min(1, speed / 22));
     } else {
       v.sawGrind = Math.max(0, v.sawGrind - dt * 3);
+      v.sawLastNose = Math.asin(THREE.MathUtils.clamp(-v.forward.y, -1, 1));
       // partial charge bleeds away, a full bar does not — you earned that
       if (v.specialEnergy < 1) v.specialEnergy = Math.max(0, v.specialEnergy - dt * 0.05);
       if (v === this.player) sfx.sawGrind(0);
@@ -1084,19 +1097,26 @@ export class Game {
 
     v.sawSwing = Math.max(0, v.sawSwing - dt);
 
-    if (v.input.special) {
-      v.input.special = false;
-      if (v.specialEnergy >= 1 && v.sawSwing <= 0) {
-        this.doSawSlam(v);
-      } else if (v === this.player) {
-        this.hud.toast(`SAW ${Math.floor(v.specialEnergy * 100)}% — GRIND TO CHARGE`, '#8a7f96');
+    // THE RELEASE IS THE ATTACK. Hold to drag the blade and build heat, let go
+    // and he whips the arm forward. There is no separate fire button — a press
+    // would mean you could swing without ever having charged, which is the whole
+    // cost of the weapon.
+    const held = v.input.specialHeld;
+    if (v.sawWasHeld && !held && v.sawSwing <= 0) {
+      if (v.specialEnergy >= 1) this.doSawSlam(v);
+      else if (v === this.player && v.specialEnergy > 0.05) {
+        this.hud.toast(`SAW ${Math.floor(v.specialEnergy * 100)}% — HOLD TO CHARGE`, '#8a7f96');
       }
     }
+    v.sawWasHeld = held;
+    // a press of the same button does nothing for REAPER; swallow it so it does
+    // not fall through to anything else
+    v.input.special = false;
   }
 
   private doSawSlam(v: Vehicle) {
     v.specialEnergy = 0;
-    v.sawSwing = 0.45;
+    v.sawSwing = SAW_SWING_TIME;
     v.spawnProtection = 0;
     const fwd = v.forward;
     const reach = _v2.copy(v.position).addScaledVector(fwd, SAW_RANGE * 0.55);
@@ -1949,18 +1969,39 @@ export class Game {
       if (v.sawArm && v.sawBar) {
         const g = v.sawGrind;
         if (v.sawSwing > 0) {
-          // 0 at the start of the swing, 1 at the end
-          const t = 1 - v.sawSwing / 0.45;
-          // whips down and across, then settles back to the carry pose
-          const arc = Math.sin(Math.min(1, t * 1.7) * Math.PI);
-          v.sawArm.rotation.set(-0.5 + arc * 1.5, -arc * 1.5, -0.5 + arc * 0.9);
+          // THE WHIP: the arm comes across the front of the bike. 0 at the start
+          // of the swing, 1 at the end; the arc peaks early so the strike lands
+          // at the front of the motion rather than the end of it.
+          const t = 1 - v.sawSwing / SAW_SWING_TIME;
+          const arc = Math.sin(Math.min(1, t * 1.6) * Math.PI);
+          v.sawArm.rotation.set(
+            SAW_REST[0] + arc * 0.5,
+            SAW_REST[1] - arc * 2.1,     // swings from out-right to across the front
+            SAW_REST[2] - arc * 0.7);
         } else {
-          // carry pose at rest, dropped and levelled to the tarmac while grinding
-          v.sawArm.rotation.set(-0.5 + g * 1.42, g * 0.26, -0.5 + g * 0.42);
+          // rest → grind: the blade drops from carried-out-right to flat on the
+          // tarmac beside the rear wheel
+          v.sawArm.rotation.set(
+            SAW_REST[0] + g * (SAW_GRIND[0] - SAW_REST[0]),
+            SAW_REST[1] + g * (SAW_GRIND[1] - SAW_REST[1]),
+            SAW_REST[2] + g * (SAW_GRIND[2] - SAW_REST[2]));
         }
         // the chain only runs when it is working
         if (g > 0.02 || v.sawSwing > 0) v.sawBar.rotation.z += dt * (26 + g * 40);
-        if (v.rider) v.rider.rotation.x = -g * 0.22;   // leans back on the wheelie
+        v.setSawCharge?.(v.specialEnergy);
+        // fire licking along the heated part of the bar
+        if (v.specialEnergy > 0.02 && v.sawTip) {
+          v.sawBar.getWorldPosition(_v2);
+          this.effects.bladeFire(_v2, v.sawTip(_v3), v.specialEnergy);
+        }
+        // nose up, pivoting on the rear axle, and the rider leans back with it
+        if (v.wheelieNode) v.wheelieNode.rotation.x = g * SAW_WHEELIE_ANGLE;
+        if (v.rider) v.rider.rotation.x = -g * 0.3;
+        // our two wheels, driven from the rig's own spin/steer so they stay in
+        // step with the suspension solver even though they are not parented to it
+        if (v.frontSpin) v.frontSpin.rotation.x = v.wheelSpin % (Math.PI * 2);
+        if (v.rearSpin) v.rearSpin.rotation.x = v.wheelSpin % (Math.PI * 2);
+        if (v.frontSteer) v.frontSteer.rotation.y = v.wheelSteer;
       }
       if (v.shieldMesh && v.shieldMat) {
         v.shieldMesh.visible = v.alive && v.shieldTime > 0;

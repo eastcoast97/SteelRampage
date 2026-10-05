@@ -67,11 +67,21 @@ export class Vehicle {
   nukeCooldown = 0;
   /** REAPER only — 0..1 eased, how far the blade is down on the road */
   sawGrind = 0;
-  /** REAPER only — counts down through the slam animation */
+  /** REAPER only — counts down through the whip animation */
   sawSwing = 0;
+  /** REAPER only — last frame's held state, so handleSaw can see the RELEASE */
+  sawWasHeld = false;
+  /** REAPER only — previous nose-up angle, for damping the wheelie */
+  sawLastNose = 0;
   /** REAPER only — world position of the blade tip (set from the mesh) */
   sawTip: ((out: THREE.Vector3) => THREE.Vector3) | null = null;
+  /** REAPER only — 0..1 charge → fire on the blade */
+  setSawCharge: ((t: number) => void) | null = null;
   /** REAPER only — animated pivots (see render/reaper.ts) */
+  wheelieNode: THREE.Object3D | null = null;
+  frontSteer: THREE.Object3D | null = null;
+  frontSpin: THREE.Object3D | null = null;
+  rearSpin: THREE.Object3D | null = null;
   sawArm: THREE.Object3D | null = null;
   sawBar: THREE.Object3D | null = null;
   rider: THREE.Object3D | null = null;
@@ -510,6 +520,7 @@ export class Vehicle {
     this.nukeCooldown = 0;
     this.sawGrind = 0;
     this.sawSwing = 0;
+    this.sawWasHeld = false;
     this.body.setTranslation({ x: pos.x, y: pos.y, z: pos.z }, true);
     this.body.setRotation(quatFromYaw(yaw), true);
     this.body.setLinvel({ x: 0, y: 0, z: 0 }, true);

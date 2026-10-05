@@ -96,7 +96,14 @@ export class Hud {
     const ready = player.specialEnergy >= 1 && !windowed;
     this.specialBar.style.width = `${(windowed ? player.specialWindow / 45 : player.specialEnergy) * 100}%`;
     this.specialBar.classList.toggle('active', windowed || active);
-    if (player.spec.specialId === 'bomb' && player.bombOut) {
+    if (player.spec.specialId === 'chainsaw') {
+      // REAPER's contract is hold-then-release, which is not what any other
+      // special does, so the bar says it outright rather than hoping you guess
+      this.specialLabel.textContent = ready
+        ? `${player.spec.specialName} — RELEASE TO STRIKE`
+        : `${player.spec.specialName} — HOLD TO GRIND`;
+      this.specialLabel.className = 'bar-label special' + (ready ? ' ready' : '');
+    } else if (player.spec.specialId === 'bomb' && player.bombOut) {
       this.specialLabel.textContent = `${player.spec.specialName} — PRESS AGAIN TO DETONATE`;
       this.specialLabel.className = 'bar-label special ready';
     } else if (windowed) {

@@ -317,6 +317,27 @@ export class Effects {
     }
   }
 
+  /**
+   * Fire running along a chainsaw bar, seeded between the handle and the tip.
+   *
+   * `t` is the charge, and it controls HOW FAR DOWN THE BAR the fire has spread
+   * as well as how fierce it is — so the blade reads as a meter from across the
+   * arena, the way a lit fuse does.
+   */
+  bladeFire(from: THREE.Vector3, to: THREE.Vector3, t: number) {
+    if (t <= 0.02) return;
+    const n = 1 + Math.floor(t * 3);
+    for (let i = 0; i < n; i++) {
+      const f = Math.random() * (0.1 + t * 0.9);         // only the heated part burns
+      const at = this.scratchVec.copy(from).lerp(to, f);
+      this.emit(at, this.scratchVec2.set(
+        (Math.random() - 0.5) * 1.2, 1.4 + Math.random() * 2.2 * t, (Math.random() - 0.5) * 1.2),
+        { life: 0.2 + Math.random() * 0.22, sizeFrom: 0.14 + t * 0.2, sizeTo: 0.5 + t * 0.5,
+          from: 0xffd47a, to: 0xd03a06, cell: CELL_FIRE_0, cells: CELL_FIRE_N,
+          gravity: -2.2, drag: 2.4, spin: (Math.random() - 0.5) * 3, opacity: 0.8 });
+    }
+  }
+
   /** the saw coming down: a short hot arc plus a burst where it lands */
   sawSlam(at: THREE.Vector3, fwd: THREE.Vector3) {
     this.emit(at, this.scratchVec2.set(0, 0, 0),
