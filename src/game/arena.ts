@@ -951,6 +951,49 @@ function addSkyLoop(
 }
 
 
+
+/**
+ * Promote one socket to THE nuke socket, roaming between three widely separated
+ * positions.
+ *
+ * The nuke used to be a weight in the respawn shuffle, which measured out at one
+ * appearance per TEN MINUTES — and never at match start, because initial socket
+ * types come from the arena's own PICKUP_ markers and no arena authors a nuke
+ * marker. A signature weapon nobody ever finds may as well not exist.
+ *
+ * It now works like overdrive: guaranteed on the map, in a known place, and a
+ * contested destination rather than a lottery.
+ *
+ * The roam positions are TAKEN FROM existing sockets rather than hand-picked
+ * coordinates. Every one is already authored, on-road and reachable in whichever
+ * arena we are in, so this cannot drop a pickup inside a wall the way hand
+ * coordinates have twice before — and it needs no per-arena table.
+ */
+function dedicateNukeSocket(points: ArenaData['pickupPoints']) {
+  // never steal the roaming overdrive socket; it has the same job
+  const usable = points.filter((p) => !p.alts);
+  if (usable.length < 3) return;
+
+  // greedy farthest-point: start from the socket furthest out, then repeatedly
+  // take whichever is furthest from everything already chosen, so the three
+  // spread across the map instead of clustering in one quarter
+  const chosen = [usable.reduce((a, b) => (b.pos.lengthSq() > a.pos.lengthSq() ? b : a))];
+  while (chosen.length < 3) {
+    let best = null, bestD = -1;
+    for (const c of usable) {
+      if (chosen.includes(c)) continue;
+      const d = Math.min(...chosen.map((k) => k.pos.distanceToSquared(c.pos)));
+      if (d > bestD) { bestD = d; best = c; }
+    }
+    if (!best) break;
+    chosen.push(best);
+  }
+
+  const alts = chosen.map((c) => c.pos.clone());
+  for (const c of chosen) points.splice(points.indexOf(c), 1);
+  points.push({ pos: alts[0].clone(), type: 'nuke', alts });
+}
+
 /** Ground clutter for whichever arena we ended up building. Called last so the
  *  occupancy grid sees every building, prop and ramp already in the scene. */
 function scatterClutter(
@@ -1316,6 +1359,7 @@ export function buildArena(world: RAPIER.World, scene: THREE.Scene, forcedSkyIdx
   if (glb) {
     const data = consumeArenaGLB(world, scene, glb);
     addSkyLoop(world, scene, H, skyIdx, data);
+    dedicateNukeSocket(data.pickupPoints);
     for (const pad of data.boostPads) padVisual(pad.x, pad.y, pad.z, pad.hx >= pad.hz);
     scatterClutter(scene, H, arenaIdx, data);
     return { ...data, skyIdx, envColors: { top: sky.top, hor: sky.hor } };
@@ -1636,6 +1680,7 @@ export function buildArena(world: RAPIER.World, scene: THREE.Scene, forcedSkyIdx
   ];
 
   addSkyLoop(world, scene, H, skyIdx, { pickupPoints, boostPads, spawnPoints });
+  dedicateNukeSocket(pickupPoints);
   scatterClutter(scene, H, arenaIdx, { spawnPoints, pickupPoints, barrelPoints, boostPads });
 
   return { spawnPoints, pickupPoints, barrelPoints, pedZones, boostPads, pumpPoints: [], skyIdx, envColors: { top: sky.top, hor: sky.hor } };

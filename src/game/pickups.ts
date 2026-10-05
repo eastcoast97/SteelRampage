@@ -15,7 +15,7 @@ const RESPAWN_TIME: Record<PickupType, number> = {
   overdrive: 22,
   mines: 14,
   special: 16,
-  nuke: 34,
+  nuke: 40,
 };
 
 /** canonical order — index is what goes over the wire for guest sync */
@@ -27,7 +27,6 @@ export const PICKUP_TYPE_ORDER: PickupType[] = ['health', 'missiles', 'turbo', '
  *  (it keeps its dedicated roaming socket). */
 const SHUFFLE_POOL: [PickupType, number][] = [
   ['missiles', 28], ['health', 22], ['turbo', 16], ['mines', 14], ['special', 12], ['shield', 8],
-  ['nuke', 3],   // deliberately rare: one lands roughly every 35th respawn
 ];
 function rollShuffleType(): PickupType {
   let total = 0;
@@ -278,7 +277,9 @@ export class PickupManager {
           // TYPE SHUFFLE: sockets cycle through the weighted pool on respawn
           // so weapon locations can't be farmed by memory (overdrive keeps
           // its dedicated roaming socket)
-          if (p.type !== 'overdrive') this.applyType(p, rollShuffleType());
+          // the two dedicated sockets keep their type forever — rerolling one
+          // would delete that weapon from the match permanently
+          if (p.type !== 'overdrive' && p.type !== 'nuke') this.applyType(p, rollShuffleType());
           p.active = true;
           p.mesh.visible = true;
           p.popT = 0.15;

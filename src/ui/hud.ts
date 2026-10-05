@@ -299,7 +299,7 @@ export class Hud {
     ctx.beginPath(); ctx.arc(C, C, S * 0.32, 0, Math.PI * 2); ctx.stroke();
 
     // high-value pickups (only while spawned in)
-    const PICKUP_DOTS: Record<string, string> = { missiles: '#ff8a3a', overdrive: '#ff44dd', shield: '#7d95ff' };
+    const PICKUP_DOTS: Record<string, string> = { missiles: '#ff8a3a', overdrive: '#ff44dd', shield: '#7d95ff', nuke: '#aaff00' };
     for (const pk of (game.pickups as any)['pickups']) {
       if (!pk.active || !PICKUP_DOTS[pk.type]) continue;
       const dx = pk.pos.x - pPos.x;

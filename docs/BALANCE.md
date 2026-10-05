@@ -37,8 +37,7 @@ weapon identically and asymptotes — armor can never reach immunity.
 ## Damage hierarchy (raw, pre-mitigation)
 
 **APEX — Nuke: 48, ARMOR-PIERCING, radius 22.** Deliberately outside the hierarchy
-below and the only thing that outranks a missile. Rare pickup only (weight 3 in a
-pool totalling 104, so roughly one socket in 35), capacity 1, no overdrive
+below and the only thing that outranks a missile. Pickup only, capacity 1, no overdrive
 multiplier — overdrive scales the weapons you use repeatedly, and 48 piercing is
 already the game's ceiling. Unguided and slow (`NUKE_SPEED` 30 m/s) so it is a
 read-and-dodge weapon, not a sniper rifle. `NUKE_FUSE` (3.2) is the proximity
@@ -80,6 +79,15 @@ Overdrive pickup: MG ×1.75 = 3.85, missile ×1.5 = 51 — tiers preserved.
 - Owner takes 0 (excluded from `explosionAt` like every other blast)
 - 90s soak with nukes seeded into 8 of 24 sockets: 5 fired, 3 kills, bots
   1383–2210 m, no leaked projectiles
+
+### Nuke availability (10 simulated minutes of a live match)
+
+As a shuffle weight it was unfindable: **one appearance in 10 minutes**, first at
+117 s, never at match start (initial socket types come from the arena's PICKUP_
+markers and no arena authors a nuke marker), and only 31 sockets rerolled in the
+whole match. On a dedicated roaming socket instead: **on the map 65% of the
+match, taken 5 times, longest gap 47 s.** One nuke exists at any moment, which is
+what makes it a place on the map worth contesting rather than a lottery.
 
 ## TTK reference (locked missiles / sustained MG @23dps)
 
