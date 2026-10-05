@@ -1,6 +1,7 @@
 import * as THREE from 'three';
-import type { CarSpec } from '../game/specs';
+import { MAX_MISSILES, MAX_MINES, type CarSpec } from '../game/specs';
 import { buildRocket } from './rocket';
+import { buildMine } from './mine';
 
 /**
  * Visible ammunition carried on the car.
@@ -16,9 +17,6 @@ import { buildRocket } from './rocket';
  * (pickup, fire, respawn, or a network snapshot).
  */
 
-export const MAX_MOUNTED_MISSILES = 3;
-export const MAX_MOUNTED_MINES = 6;
-
 export interface Loadout {
   group: THREE.Group;
   missiles: THREE.Object3D[];
@@ -31,10 +29,6 @@ export interface Loadout {
 }
 
 const railMat = new THREE.MeshStandardMaterial({ color: 0x3a3742, roughness: 0.65, metalness: 0.55 });
-const mineShell = new THREE.MeshStandardMaterial({ color: 0x2a2730, roughness: 0.6, metalness: 0.45 });
-const mineLight = new THREE.MeshStandardMaterial({
-  color: 0xff3322, emissive: 0xff2200, emissiveIntensity: 1.4, roughness: 0.4,
-});
 
 /** a rack missile: the shared rocket, laid nose-forward (-Z) and sized to the rail */
 function missileMesh(): THREE.Group {
@@ -47,18 +41,14 @@ function missileMesh(): THREE.Group {
   return holder;
 }
 
-/** a bumper mine — squat puck with a live indicator */
+/** a bumper clamp: the shared mine, laid face-out (+Z) and sized to the bumper */
 function mineMesh(): THREE.Group {
-  const g = new THREE.Group();
-  const shell = new THREE.Mesh(new THREE.CylinderGeometry(0.17, 0.2, 0.1, 8), mineShell);
-  shell.rotation.x = Math.PI / 2;
-  // +Z is rearward once mounted on the bumper, so the live indicator has to be
-  // on that face or it is buried in the bodywork and never seen
-  const lamp = new THREE.Mesh(new THREE.SphereGeometry(0.055, 6, 5), mineLight);
-  lamp.position.z = 0.07;
-  g.add(shell, lamp);
-  g.traverse((o) => { if ((o as THREE.Mesh).isMesh) o.castShadow = true; });
-  return g;
+  const holder = new THREE.Group();
+  const m = buildMine().group;
+  m.rotation.x = Math.PI / 2;     // axis +Y becomes +Z, so the indicator faces aft
+  m.scale.setScalar(0.4);
+  holder.add(m);
+  return holder;
 }
 
 export function buildLoadout(spec: CarSpec, roofY: number, hoodY: number): Loadout {
@@ -77,10 +67,10 @@ export function buildLoadout(spec: CarSpec, roofY: number, hoodY: number): Loado
   group.add(rail);
 
   const missiles: THREE.Object3D[] = [];
-  for (let i = 0; i < MAX_MOUNTED_MISSILES; i++) {
+  for (let i = 0; i < MAX_MISSILES; i++) {
     const m = missileMesh();
     // centre tube sits slightly forward so the rack reads as a cluster
-    const lane = i - (MAX_MOUNTED_MISSILES - 1) / 2;
+    const lane = i - (MAX_MISSILES - 1) / 2;
     m.position.set(lane * sx * 0.52, rackY, rackZ + (i === 1 ? -0.06 : 0));
     m.visible = false;
     group.add(m);
@@ -90,7 +80,7 @@ export function buildLoadout(spec: CarSpec, roofY: number, hoodY: number): Loado
   // --- mines: clamped along the rear bumper, alternating height ---
   const mines: THREE.Object3D[] = [];
   const bumperZ = sz + 0.12;
-  for (let i = 0; i < MAX_MOUNTED_MINES; i++) {
+  for (let i = 0; i < MAX_MINES; i++) {
     const m = mineMesh();
     const col = i % 3, row = Math.floor(i / 3);
     m.position.set((col - 1) * sx * 0.56, hoodY - 0.42 - row * 0.3, bumperZ);

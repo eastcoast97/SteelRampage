@@ -5,9 +5,10 @@ import { Vehicle } from './vehicle';
 import { BotController } from './bots';
 import { PickupManager, PICKUP_COLORS, type PickupType } from './pickups';
 import { PedManager } from './peds';
-import { CAR_SPECS, BOT_NAMES, type CarSpec } from './specs';
+import { CAR_SPECS, BOT_NAMES, MAX_MISSILES, MAX_MINES, type CarSpec } from './specs';
 import { buildCarMesh, makeContactShadow } from '../render/carMesh';
 import { buildRocket } from '../render/rocket';
+import { buildMine } from '../render/mine';
 import { Effects } from '../render/effects';
 import { Hud } from '../ui/hud';
 import { sfx } from '../audio/sfx';
@@ -821,17 +822,7 @@ export class Game {
       : v.position.addScaledVector(back, v.spec.size.z + 1.2);
     pos.y = Math.max(0.28, pos.y - 0.3);
 
-    const glowMat = new THREE.MeshStandardMaterial({
-      color: 0xff3322, emissive: 0xff2200, emissiveIntensity: 1.2, roughness: 0.4,
-    });
-    const mesh = new THREE.Group();
-    const base = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.42, 0.5, 0.22, 10),
-      new THREE.MeshStandardMaterial({ color: 0x2a2730, roughness: 0.6, metalness: 0.4 }),
-    );
-    const bump = new THREE.Mesh(new THREE.SphereGeometry(0.16, 8, 6), glowMat);
-    bump.position.y = 0.16;
-    mesh.add(base, bump);
+    const { group: mesh, glowMat } = buildMine();
     mesh.position.copy(pos);
     this.scene.add(mesh);
 
@@ -1636,12 +1627,12 @@ export class Game {
     this.effects.pickupBurst(
       _v1.copy(v.position).setY(v.position.y + 0.6), PICKUP_COLORS[type]);
     if (type === 'health') v.health = Math.min(v.spec.maxHealth, v.health + 40);
-    else if (type === 'missiles') v.missiles = Math.min(3, v.missiles + 1);  // +1 each, rack of 3
+    else if (type === 'missiles') v.missiles = Math.min(MAX_MISSILES, v.missiles + 1);  // +1 each
     else if (type === 'turbo') v.turboMeter = v.spec.turboMax;
     else if (type === 'shield') v.shieldTime = 10;  // exactly 10s of full immunity
     else if (type === 'overdrive') v.overdriveTime = 8;
     else if (type === 'special') v.specialEnergy = Math.min(1, v.specialEnergy + 0.25);
-    else v.minesAmmo = Math.min(6, v.minesAmmo + 2);
+    else v.minesAmmo = Math.min(MAX_MINES, v.minesAmmo + 2);
     if (this.netOpts?.role === 'host' && !v.isBot) {
       this.netEvents.push({ k: 'pick', vi: this.vehicles.indexOf(v), item: type });
     }

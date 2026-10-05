@@ -1,6 +1,8 @@
 import * as THREE from 'three';
 import type { Vehicle } from './vehicle';
 import { buildRocket } from '../render/rocket';
+import { buildMine } from '../render/mine';
+import { MAX_MISSILES, MAX_MINES } from './specs';
 
 export type PickupType = 'health' | 'missiles' | 'turbo' | 'shield' | 'overdrive' | 'mines' | 'special';
 
@@ -187,17 +189,9 @@ function buildPickupMesh(type: PickupType): THREE.Group {
     halo.rotation.x = Math.PI / 2.6;
     core.add(halo);
   } else {
-    // mines: same look as a deployed mine — graphite disc, red dot signal
-    core = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.42, 0.5, 0.3, 10),
-      new THREE.MeshStandardMaterial({ color: 0x2a2a32, roughness: 0.6, metalness: 0.4 }),
-    );
-    const bump = new THREE.Mesh(
-      new THREE.SphereGeometry(0.18, 8, 6),
-      new THREE.MeshStandardMaterial({ color: 0xff2e2e, emissive: 0xff2200, emissiveIntensity: 1.4 }),
-    );
-    bump.position.y = 0.2;
-    core.add(bump);
+    // the shared mine — identical to the clamps on your bumper and to one armed
+    // in the road
+    core = buildMine().group;
   }
   g.add(core);
   return g;
@@ -304,11 +298,11 @@ export class PickupManager {
       for (const v of vehicles) {
         if (!v.alive) continue;
         if (v.position.distanceToSquared(p.mesh.position) < 2.4 * 2.4) {
-          // don't waste full pickups — a full rack (3) leaves the missiles for others
+          // don't waste full pickups — a full rack leaves the missiles for others
           if (p.type === 'health' && v.health >= v.spec.maxHealth) continue;
-          if (p.type === 'missiles' && v.missiles >= 3) continue;
+          if (p.type === 'missiles' && v.missiles >= MAX_MISSILES) continue;
           if (p.type === 'turbo' && v.turboMeter >= v.spec.turboMax - 0.1) continue;
-          if (p.type === 'mines' && v.minesAmmo >= 6) continue;
+          if (p.type === 'mines' && v.minesAmmo >= MAX_MINES) continue;
           if (p.type === 'special' && v.specialEnergy >= 1) continue;
           p.active = false;
           // ±30% jitter so respawn timers can't be memorized and camped

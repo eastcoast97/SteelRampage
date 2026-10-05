@@ -1,3 +1,13 @@
+/**
+ * Carry limits. These live here, with the rest of the gameplay tuning, because
+ * three separate files used to hardcode them: the pickup that refuses a full
+ * rack, the collect that clamps the count, and the rack of mounts on the car.
+ * Raise the missile cap without raising the rack and the extra missile is
+ * invisible — you carry ammo nothing on the car accounts for.
+ */
+export const MAX_MISSILES = 3;
+export const MAX_MINES = 6;
+
 export type SpecialId = 'dash' | 'minigun' | 'flame' | 'turret' | 'slam' | 'bomb' | 'repair' | 'minetrail';
 
 export interface CarSpec {
