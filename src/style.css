@@ -58,6 +58,15 @@ html, body {
   transform: skewX(-12deg);
   border: 1px solid rgba(255,255,255,0.25);
 }
+.bar-outer.armor { height: 14px; width: 100%; }
+.bar-inner.armor {
+  background: linear-gradient(90deg, #ff2d00, #ff8a00 55%, #ffc24d);
+  transition: width 0.12s linear;
+}
+/* the armour bar is the one you read in a panic, so it changes HUE as it
+   drains rather than only length — amber past half, red in the last quarter */
+.bar-inner.armor.warn { background: linear-gradient(90deg, #ff6a00, #ffc24d); }
+.bar-inner.armor.danger { background: linear-gradient(90deg, #ff1b1b, #ff6a3d); }
 .bar-outer.turbo { height: 9px; width: 70%; }
 .bar-outer.special { height: 12px; width: 85%; }
 .bar-inner.special { background: linear-gradient(90deg, #a020c0, #ff44dd); transition: width 0.15s linear; }
@@ -99,7 +108,7 @@ html, body {
 #health-bar.critical { animation: hpCritical 0.85s ease-in-out infinite; }
 @keyframes hpCritical {
   0%, 100% { filter: none; }
-  50% { filter: hue-rotate(-35deg) brightness(1.5); }
+  50% { filter: brightness(1.7) saturate(1.4); }
 }
 
 /* segmented bars — count your blocks at a glance */

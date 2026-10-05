@@ -38,6 +38,8 @@ interface Pickup {
   mesh: THREE.Group;
   ring: THREE.Mesh;
   ringMat: THREE.MeshBasicMaterial;
+  /** light shaft + halo + floor glow that make the socket visible at range */
+  beacon: { group: THREE.Group; shaft: THREE.Mesh; halo: THREE.Mesh; glow: THREE.Mesh };
   active: boolean;
   timer: number;
   /** >0 while playing the acquire implosion */
@@ -60,6 +62,70 @@ export const PICKUP_COLORS: Record<PickupType, number> = {
   special: 0xc94dff,   // Special violet — matches the special-meter bar
 };
 const COLORS = PICKUP_COLORS;
+
+/**
+ * The shared furniture every socket gets: a light shaft you can see across the
+ * arena, a floor glow, and a halo that counter-rotates against the icon.
+ *
+ * The icons were already readable up close but a socket was invisible until you
+ * were nearly on top of it, so pickups were something you stumbled into rather
+ * than something you drove at. The beacon is what makes them a destination; the
+ * icon still does the job of saying WHICH pickup it is.
+ */
+function buildBeacon(color: number): { group: THREE.Group; shaft: THREE.Mesh; halo: THREE.Mesh; glow: THREE.Mesh } {
+  const group = new THREE.Group();
+  const add = (o: THREE.Object3D) => { group.add(o); return o; };
+
+  // tapered shaft, brightest at the base, fading out as it rises
+  const shaftGeo = new THREE.CylinderGeometry(0.95, 0.34, 5.0, 16, 1, true);
+  const pos = shaftGeo.getAttribute('position');
+  const alpha = new Float32Array(pos.count);
+  for (let i = 0; i < pos.count; i++) {
+    const t = (pos.getY(i) + 2.5) / 5.0;         // 0 at the foot, 1 at the top
+    alpha[i] = Math.pow(1 - t, 1.7);
+  }
+  shaftGeo.setAttribute('aAlpha', new THREE.BufferAttribute(alpha, 1));
+  const shaft = new THREE.Mesh(shaftGeo, new THREE.ShaderMaterial({
+    uniforms: { uColor: { value: new THREE.Color(color) }, uFade: { value: 1 } },
+    vertexShader: `
+      attribute float aAlpha;
+      varying float vA;
+      void main() { vA = aAlpha; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }
+    `,
+    fragmentShader: `
+      uniform vec3 uColor; uniform float uFade;
+      varying float vA;
+      void main() { gl_FragColor = vec4(uColor, vA * 0.5 * uFade); }
+    `,
+    transparent: true, depthWrite: false, side: THREE.DoubleSide,
+    blending: THREE.AdditiveBlending,
+  }));
+  shaft.position.y = 1.9;
+  shaft.renderOrder = 6;
+  add(shaft);
+
+  // soft pool on the ground under it
+  const glow = new THREE.Mesh(
+    new THREE.CircleGeometry(1.5, 24),
+    new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.22,
+      blending: THREE.AdditiveBlending, depthWrite: false }),
+  );
+  glow.rotation.x = -Math.PI / 2;
+  glow.position.y = -0.72;
+  glow.renderOrder = 5;
+  add(glow);
+
+  // halo that counter-rotates against the icon
+  const halo = new THREE.Mesh(
+    new THREE.TorusGeometry(0.95, 0.045, 8, 28),
+    new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.85,
+      blending: THREE.AdditiveBlending, depthWrite: false }),
+  );
+  halo.rotation.x = Math.PI / 2;
+  add(halo);
+
+  return { group, shaft, halo, glow };
+}
 
 function buildPickupMesh(type: PickupType): THREE.Group {
   const g = new THREE.Group();
@@ -192,9 +258,12 @@ export class PickupManager {
       ring.rotation.x = -Math.PI / 2;
       ring.position.set(p.pos.x, p.pos.y - 0.75, p.pos.z);
       scene.add(ring);
+      const beacon = buildBeacon(PICKUP_COLORS[p.type]);
+      beacon.group.position.copy(p.pos);
+      scene.add(beacon.group);
       this.pickups.push({
         type: p.type, pos: p.pos.clone(), alts: p.alts,
-        mesh, ring, ringMat, active: true, timer: 0, shrinkT: 0, popT: 0,
+        mesh, ring, ringMat, beacon, active: true, timer: 0, shrinkT: 0, popT: 0,
       });
     }
   }
@@ -205,15 +274,21 @@ export class PickupManager {
       // acquire implosion (90ms scale-down)
       if (p.shrinkT > 0) {
         p.shrinkT -= dt;
-        const s = Math.max(0.01, p.shrinkT / 0.09);
-        p.mesh.scale.setScalar(s);
+        // flare UP and out, then snap away — a pure implosion read as the pickup
+        // being deleted rather than consumed
+        const t = 1 - p.shrinkT / 0.16;
+        p.mesh.scale.setScalar(Math.max(0.01, (1 + t * 1.4) * (1 - t * t)));
+        p.mesh.rotation.y += dt * 14;
+        p.mesh.position.y = p.pos.y + t * 1.1;
         if (p.shrinkT <= 0) {
           p.mesh.visible = false;
           p.mesh.scale.setScalar(1);
+          p.mesh.position.y = p.pos.y;
         }
       }
       if (!p.active) {
         p.timer -= dt;
+        p.beacon.group.visible = false;
         // socket ring brightens as respawn approaches
         p.ringMat.opacity = 0.08 + 0.25 * (1 - Math.min(1, p.timer / RESPAWN_TIME[p.type]));
         if (p.timer <= 0) {
@@ -238,6 +313,7 @@ export class PickupManager {
           p.mesh.visible = true;
           p.popT = 0.15;
           p.ringMat.opacity = 0.4;
+          p.beacon.group.visible = true;
         }
         continue;
       }
@@ -247,7 +323,18 @@ export class PickupManager {
         p.mesh.scale.setScalar(Math.min(1, 1 - p.popT / 0.15));
       }
       p.mesh.rotation.y += dt * 2.2;
-      p.mesh.position.y = p.pos.y + Math.sin(this.time * 2.4 + p.pos.x) * 0.15;
+      const bob = Math.sin(this.time * 2.4 + p.pos.x) * 0.15;
+      p.mesh.position.y = p.pos.y + bob;
+      // the halo counter-rotates and breathes against the icon's spin, which is
+      // what stops the socket reading as a static prop
+      const b = p.beacon;
+      b.group.visible = true;
+      b.halo.rotation.z -= dt * 1.4;
+      b.halo.position.y = bob * 0.6;
+      b.halo.scale.setScalar(1 + Math.sin(this.time * 3.1 + p.pos.z) * 0.06);
+      const pulse = 0.82 + Math.sin(this.time * 2.0 + p.pos.x) * 0.18;
+      (b.shaft.material as THREE.ShaderMaterial).uniforms.uFade.value = pulse;
+      (b.glow.material as THREE.MeshBasicMaterial).opacity = 0.16 + pulse * 0.1;
 
       for (const v of vehicles) {
         if (!v.alive) continue;
@@ -261,7 +348,7 @@ export class PickupManager {
           p.active = false;
           // ±30% jitter so respawn timers can't be memorized and camped
           p.timer = RESPAWN_TIME[p.type] * (0.7 + Math.random() * 0.6);
-          p.shrinkT = 0.09; // implode instead of vanishing
+          p.shrinkT = 0.16; // flare-and-go, see the branch above
           onCollect(v, p.type);
           break;
         }
@@ -280,6 +367,10 @@ export class PickupManager {
     p.mesh.visible = wasVisible;
     this.scene.add(p.mesh);
     p.ringMat.color.setHex(PICKUP_COLORS[type]);
+    const c = PICKUP_COLORS[type];
+    (p.beacon.shaft.material as THREE.ShaderMaterial).uniforms.uColor.value.setHex(c);
+    (p.beacon.halo.material as THREE.MeshBasicMaterial).color.setHex(c);
+    (p.beacon.glow.material as THREE.MeshBasicMaterial).color.setHex(c);
   }
 
   /** guest sync: host streams each socket's current type index */

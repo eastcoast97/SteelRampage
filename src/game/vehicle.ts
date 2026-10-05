@@ -107,6 +107,10 @@ export class Vehicle {
   visualWheelRadius = WHEEL_RADIUS;
   /** body + bolted kit, leaned independently of the wheels (see syncVisual) */
   chassis: THREE.Object3D | null = null;
+  /** visible carried ammo; kept in step with missiles/minesAmmo every frame */
+  loadout: { sync(missiles: number, mines: number): void;
+             missileMuzzle(i: number, out: THREE.Vector3): THREE.Vector3;
+             mineAnchor(i: number, out: THREE.Vector3): THREE.Vector3 } | null = null;
   private leanRoll = 0;
   private leanPitch = 0;
   private lastVisualSpeed = 0;
@@ -483,6 +487,9 @@ export class Vehicle {
 
   syncVisual(dt = 1 / 60) {
     if (!this.mesh) return;
+    // Driven from the counts rather than from pickup/fire events, so it is
+    // correct however the count changed — including a network snapshot.
+    this.loadout?.sync(this.missiles, this.minesAmmo);
     const t = this.body.translation();
     const r = this.body.rotation();
     this.mesh.position.set(t.x, t.y, t.z);

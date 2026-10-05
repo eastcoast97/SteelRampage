@@ -35,12 +35,13 @@ export class Hud {
   private shieldRow = $('shield-row');
   private panic = $('panic');
   private popups = $('dmg-popups');
-  private healthSegs: HTMLElement[] = [];
   private shieldSegs: HTMLElement[] = [];
 
   constructor() {
-    // segmented bars: 10 armor blocks (10 HP each), 10 shield blocks (1s each)
-    this.healthSegs = this.buildSegs(this.healthBar, 10);
+    // Shield stays segmented — its 10 blocks ARE the 10 remaining seconds, so
+    // counting them is the point. Armour is a continuous bar like turbo and
+    // special: as a health value there is nothing to count, and the blocks just
+    // made the busiest corner of the HUD noisier than the bars beside it.
     this.shieldSegs = this.buildSegs($('shield-bar'), 10);
   }
 
@@ -71,7 +72,9 @@ export class Hud {
 
   update(dt: number, player: Vehicle, vehicles: Vehicle[], game: Game) {
     const hpRatio = player.health / player.spec.maxHealth;
-    this.fillSegs(this.healthSegs, hpRatio);
+    this.healthBar.style.width = `${hpRatio * 100}%`;
+    this.healthBar.classList.toggle('warn', hpRatio <= 0.5 && hpRatio > 0.25);
+    this.healthBar.classList.toggle('danger', hpRatio <= 0.25);
     // panic state below 30%: bar flashes + screen-edge red pulse
     const panicking = hpRatio < 0.3 && player.alive;
     this.healthBar.classList.toggle('critical', panicking);

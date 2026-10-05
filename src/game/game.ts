@@ -290,11 +290,12 @@ export class Game {
 
   private spawnVehicle(spec: CarSpec, pos: THREE.Vector3, yaw: number, name: string, isBot: boolean, color?: number): Vehicle {
     const v = new Vehicle(this.world, spec, pos, yaw, name, isBot);
-    const { group, wheels, wheelRadius, chassis } = buildCarMesh(spec, color);
+    const { group, wheels, wheelRadius, chassis, loadout } = buildCarMesh(spec, color);
     v.mesh = group;
     v.wheels = wheels;
     v.visualWheelRadius = wheelRadius;
     v.chassis = chassis;
+    v.loadout = loadout;
     // shield: hex-cell energy field hugging the car (mostly invisible —
     // the hex lattice reads on the rim, flares white when it eats a hit)
     const bubble = new THREE.Mesh(
@@ -363,20 +364,32 @@ export class Game {
   }
 
   private drawHpSprite(entry: { canvas: HTMLCanvasElement; tex: THREE.CanvasTexture }, ratio: number) {
+    // Mirrors the player's own armour bar: one continuous skewed bar with the
+    // same hue grammar, so a glance at an enemy reads the same way as a glance
+    // at your own HUD. The segmented version did not match anything else.
     const g = entry.canvas.getContext('2d')!;
-    g.clearRect(0, 0, 128, 16);
-    g.fillStyle = 'rgba(8, 8, 14, 0.75)';
-    g.fillRect(0, 0, 128, 16);
-    const color = ratio > 0.5 ? '#2ee86c' : ratio > 0.25 ? '#ffb300' : '#ff3b30';
-    for (let i = 0; i < 10; i++) {
-      const segFill = Math.max(0, Math.min(1, ratio * 10 - i));
-      g.fillStyle = 'rgba(255,255,255,0.14)';
-      g.fillRect(3 + i * 12.3, 3, 10, 10);
-      if (segFill > 0) {
-        g.fillStyle = color;
-        g.fillRect(3 + i * 12.3, 3, 10 * segFill, 10);
-      }
-    }
+    const W = 128, H = 16, SKEW = 4;
+    g.clearRect(0, 0, W, H);
+
+    const slab = (x: number, w: number, fill: string | CanvasGradient) => {
+      if (w <= 0) return;
+      g.fillStyle = fill;
+      g.beginPath();
+      g.moveTo(x + SKEW, 0);
+      g.lineTo(x + w + SKEW, 0);
+      g.lineTo(x + w, H);
+      g.lineTo(x, H);
+      g.closePath();
+      g.fill();
+    };
+
+    slab(2, W - 8, 'rgba(8, 8, 14, 0.78)');
+    const grad = g.createLinearGradient(0, 0, W, 0);
+    if (ratio > 0.5) { grad.addColorStop(0, '#ff2d00'); grad.addColorStop(1, '#ffc24d'); }
+    else if (ratio > 0.25) { grad.addColorStop(0, '#ff6a00'); grad.addColorStop(1, '#ffc24d'); }
+    else { grad.addColorStop(0, '#ff1b1b'); grad.addColorStop(1, '#ff6a3d'); }
+    slab(4, (W - 12) * Math.max(0, Math.min(1, ratio)), grad);
+
     entry.tex.needsUpdate = true;
   }
 
@@ -692,8 +705,14 @@ export class Game {
     v.spawnProtection = 0;
     const fwd = v.forward;
     const up = new THREE.Vector3(0, 1, 0).applyQuaternion(v.quaternion);
-    // launch low (bumper height) so point-blank shots can't skim over the target's roof
-    const pos = v.position.addScaledVector(fwd, v.spec.size.z + 0.8).addScaledVector(up, 0.35);
+    // Leave from the rack tube that just emptied, then drop to bumper height so
+    // point-blank shots still can't skim over the target's roof. Firing from the
+    // rack is what makes the mounted missiles read as the ammo you are spending.
+    const pos = v.loadout
+      ? v.loadout.missileMuzzle(v.missiles, new THREE.Vector3())
+          .addScaledVector(fwd, v.spec.size.z * 0.7)
+          .addScaledVector(up, -0.25)
+      : v.position.addScaledVector(fwd, v.spec.size.z + 0.8).addScaledVector(up, 0.35);
 
     // same design language as the pickup: sleek hull, swept fins, thruster plume
     const mesh = new THREE.Group();
@@ -816,8 +835,12 @@ export class Game {
 
   private spawnMineFrom(v: Vehicle) {
     const back = v.forward.multiplyScalar(-1);
-    const pos = v.position.addScaledVector(back, v.spec.size.z + 1.2);
-    pos.y = Math.max(0.28, pos.y - 0.8);
+    // Detach from the bumper clamp it was magnetised to, so it visibly falls off
+    // the car rather than appearing in the road behind it.
+    const pos = v.loadout
+      ? v.loadout.mineAnchor(v.minesAmmo, new THREE.Vector3()).addScaledVector(back, 0.5)
+      : v.position.addScaledVector(back, v.spec.size.z + 1.2);
+    pos.y = Math.max(0.28, pos.y - 0.3);
 
     const glowMat = new THREE.MeshStandardMaterial({
       color: 0xff3322, emissive: 0xff2200, emissiveIntensity: 1.2, roughness: 0.4,
@@ -1630,6 +1653,9 @@ export class Game {
   }
 
   private collectPickup(v: Vehicle, type: PickupType) {
+    // visible grab, in the pickup's own colour, for whoever took it
+    this.effects.pickupBurst(
+      _v1.copy(v.position).setY(v.position.y + 0.6), PICKUP_COLORS[type]);
     if (type === 'health') v.health = Math.min(v.spec.maxHealth, v.health + 40);
     else if (type === 'missiles') v.missiles = Math.min(3, v.missiles + 1);  // +1 each, rack of 3
     else if (type === 'turbo') v.turboMeter = v.spec.turboMax;
@@ -1640,8 +1666,6 @@ export class Game {
     if (this.netOpts?.role === 'host' && !v.isBot) {
       this.netEvents.push({ k: 'pick', vi: this.vehicles.indexOf(v), item: type });
     }
-    // acquire burst in the item's hue (all vehicles — enemies read pickups too)
-    this.effects.sparks(v.position.clone().setY(v.position.y + 0.6), 14, PICKUP_COLORS[type]);
     if (v === this.player) {
       sfx.pickup();
       const toasts: Record<PickupType, [string, string]> = {

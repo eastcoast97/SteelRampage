@@ -273,6 +273,28 @@ export class Effects {
         gravity: -3.2, drag: 1.8, spin: (Math.random() - 0.5) * 3 });
   }
 
+  /**
+   * Power-up grabbed: a ring that snaps outward, a column of sparks rushing up,
+   * and a flash in the pickup's own colour. The acquire used to be a 90ms
+   * implosion with no feedback at all, so collecting something felt the same as
+   * driving over a kerb.
+   */
+  pickupBurst(pos: THREE.Vector3, color: number) {
+    this.emit(this.scratchVec.copy(pos).setY(pos.y - 0.6), new THREE.Vector3(),
+      { life: 0.42, sizeFrom: 0.6, sizeTo: 6.5, from: color, to: color,
+        cell: CELL_RING, opacity: 0.95, flat: true });
+    this.emit(pos, new THREE.Vector3(),
+      { life: 0.25, sizeFrom: 2.4, sizeTo: 0.4, from: 0xffffff, to: color,
+        cell: CELL_GLOW, opacity: 0.9 });
+    for (let i = 0; i < 18; i++) {
+      const a = (i / 18) * Math.PI * 2;
+      this.emit(pos,
+        new THREE.Vector3(Math.cos(a) * 3.2, 6 + Math.random() * 5, Math.sin(a) * 3.2),
+        { life: 0.45 + Math.random() * 0.3, sizeFrom: 0.3, sizeTo: 0.08,
+          from: 0xffffff, to: color, cell: CELL_EMBER, gravity: 7, drag: 1.1 });
+    }
+  }
+
   /** muzzle flash at a gun barrel, pointing down the shot */
   muzzleFlash(pos: THREE.Vector3, dir: THREE.Vector3) {
     this.emit(pos, dir.clone().multiplyScalar(2),

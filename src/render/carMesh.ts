@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import type { CarSpec } from '../game/specs';
 import { getCarModel, getTintedTexture, getWeatheredStockTexture, AUTHORED_TEXTURES, WHEELS_BAKED_IN } from './carModels';
 import { getWheelWell, WELL_RADIUS_FRAC, WELL_FILL } from './wheelWells';
+import { buildLoadout, type Loadout } from './loadout';
 
 /** models whose stock paint IS their identity (police livery, ambulance, taxi) */
 const KEEP_STOCK_PAINT = new Set<CarSpec['build']>(['suv', 'ambulance', 'taxi']);
@@ -99,6 +100,8 @@ export interface CarMeshResult {
   wheelRadius: number;
   /** body + bolted kit, minus the wheels — leaned for weight transfer */
   chassis: THREE.Object3D;
+  /** visible carried ammunition, mounted on the chassis */
+  loadout: Loadout;
 }
 
 function buildFromModel(spec: CarSpec, model: { body: THREE.Group; wheel: THREE.Object3D }): CarMeshResult {
@@ -168,6 +171,9 @@ function buildFromModel(spec: CarSpec, model: { body: THREE.Group; wheel: THREE.
   bbox = new THREE.Box3().setFromObject(body);
   const roofY = bbox.max.y;
   const hoodY = bbox.min.y + (bbox.max.y - bbox.min.y) * 0.62;
+  // carried ammo rides on the chassis so it leans with the body
+  const loadout = buildLoadout(spec, roofY, hoodY);
+  chassis.add(loadout.group);
 
   // ================= WEAPONIZATION KIT (Twisted-Metal-style) =================
   const gunMetal = new THREE.MeshStandardMaterial({
@@ -326,7 +332,7 @@ function buildFromModel(spec: CarSpec, model: { body: THREE.Group; wheel: THREE.
   const wheels: THREE.Object3D[] = [];
   // models with wheels already in the mesh get none — vehicle.ts loops over
   // this array, so an empty one simply skips the spin/steer visuals
-  if (WHEELS_BAKED_IN.has(spec.build)) return { group, wheels, wheelRadius: 0, chassis };
+  if (WHEELS_BAKED_IN.has(spec.build)) return { group, wheels, wheelRadius: 0, chassis, loadout };
   // Size and place the wheel from the well the Blender cut actually left in
   // this body, not from a stock constant: the AI bodies carry monster-truck
   // arches, so a stock 0.32 wheel sits lost inside one.
@@ -373,7 +379,7 @@ function buildFromModel(spec: CarSpec, model: { body: THREE.Group; wheel: THREE.
     wheels.push(pivot);
   });
 
-  return { group, wheels, wheelRadius: targetR, chassis };
+  return { group, wheels, wheelRadius: targetR, chassis, loadout };
 }
 
 export function buildCarMesh(spec: CarSpec, colorOverride?: number): CarMeshResult {
@@ -384,6 +390,8 @@ export function buildCarMesh(spec: CarSpec, colorOverride?: number): CarMeshResu
   // same split as the model path: body parts lean, wheels stay planted
   const chassis = new THREE.Group();
   group.add(chassis);
+  const loadout = buildLoadout(spec, spec.size.y * 1.6, spec.size.y * 0.4);
+  chassis.add(loadout.group);
   const color = colorOverride ?? spec.color;
   const bodyMat = new THREE.MeshStandardMaterial({ color, roughness: 0.34, metalness: 0.5 });
   const bodyDark = new THREE.MeshStandardMaterial({
@@ -597,5 +605,5 @@ export function buildCarMesh(spec: CarSpec, colorOverride?: number): CarMeshResu
     wheels.push(pivot);
   }
 
-  return { group, wheels, wheelRadius: wheelR, chassis };
+  return { group, wheels, wheelRadius: wheelR, chassis, loadout };
 }
