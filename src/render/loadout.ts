@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import type { CarSpec } from '../game/specs';
+import { buildRocket } from './rocket';
 
 /**
  * Visible ammunition carried on the car.
@@ -29,32 +30,21 @@ export interface Loadout {
   sync(missiles: number, mines: number): void;
 }
 
-const warhead = new THREE.MeshStandardMaterial({ color: 0xd8342a, roughness: 0.45, metalness: 0.3 });
-const casing = new THREE.MeshStandardMaterial({ color: 0xe8e4dc, roughness: 0.32, metalness: 0.62 });
-const finMat = new THREE.MeshStandardMaterial({ color: 0x2b2833, roughness: 0.6, metalness: 0.4 });
 const railMat = new THREE.MeshStandardMaterial({ color: 0x3a3742, roughness: 0.65, metalness: 0.55 });
 const mineShell = new THREE.MeshStandardMaterial({ color: 0x2a2730, roughness: 0.6, metalness: 0.45 });
 const mineLight = new THREE.MeshStandardMaterial({
   color: 0xff3322, emissive: 0xff2200, emissiveIntensity: 1.4, roughness: 0.4,
 });
 
-/** a single rack missile, nose forward (-Z) */
+/** a rack missile: the shared rocket, laid nose-forward (-Z) and sized to the rail */
 function missileMesh(): THREE.Group {
-  const g = new THREE.Group();
-  const body = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.09, 0.62, 8), casing);
-  body.rotation.x = Math.PI / 2;
-  const nose = new THREE.Mesh(new THREE.ConeGeometry(0.09, 0.22, 8), warhead);
-  nose.rotation.x = -Math.PI / 2;
-  nose.position.z = -0.42;
-  g.add(body, nose);
-  for (const a of [0, Math.PI / 2]) {
-    const fin = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.02, 0.16), finMat);
-    fin.position.z = 0.26;
-    fin.rotation.z = a;
-    g.add(fin);
-  }
-  g.traverse((o) => { if ((o as THREE.Mesh).isMesh) o.castShadow = true; });
-  return g;
+  const holder = new THREE.Group();
+  // no plume — it is not burning until you fire it
+  const rocket = buildRocket();
+  rocket.rotation.x = -Math.PI / 2;    // nose +Y becomes nose -Z
+  rocket.scale.setScalar(0.72);
+  holder.add(rocket);
+  return holder;
 }
 
 /** a bumper mine — squat puck with a live indicator */

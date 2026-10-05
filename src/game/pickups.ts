@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import type { Vehicle } from './vehicle';
+import { buildRocket } from '../render/rocket';
 
 export type PickupType = 'health' | 'missiles' | 'turbo' | 'shield' | 'overdrive' | 'mines' | 'special';
 
@@ -138,44 +139,8 @@ function buildPickupMesh(type: PickupType): THREE.Group {
     core = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.3, 0.3), mat);
     (core as THREE.Mesh).add(new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.9, 0.3), mat));
   } else if (type === 'missiles') {
-    // tactical rocket: pointed nose, sleek body, four swept fins, thruster flame
-    const rocket = new THREE.Group();
-    const hullMat = new THREE.MeshStandardMaterial({ color: 0xe8e4dc, roughness: 0.3, metalness: 0.65 });
-    const noseMat = new THREE.MeshStandardMaterial({
-      color: 0xff6a1a, emissive: 0xff4400, emissiveIntensity: 0.7, roughness: 0.35, metalness: 0.3,
-    });
-    const finMat = new THREE.MeshStandardMaterial({ color: 0x22202a, roughness: 0.55, metalness: 0.5 });
-    const body = new THREE.Mesh(new THREE.CylinderGeometry(0.13, 0.13, 0.62, 12), hullMat);
-    const nose = new THREE.Mesh(new THREE.ConeGeometry(0.13, 0.38, 12), noseMat);
-    nose.position.y = 0.5;
-    const band = new THREE.Mesh(new THREE.CylinderGeometry(0.136, 0.136, 0.09, 12), noseMat);
-    band.position.y = 0.14;
-    const nozzle = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.11, 0.09, 12), finMat);
-    nozzle.position.y = -0.35;
-    rocket.add(body, nose, band, nozzle);
-    for (let i = 0; i < 4; i++) {
-      const a = (i / 4) * Math.PI * 2;
-      const fin = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.3, 0.19), finMat);
-      fin.position.set(Math.cos(a) * 0.17, -0.24, Math.sin(a) * 0.17);
-      fin.rotation.y = -a;
-      fin.rotation.z = Math.cos(a) * -0.16;   // swept rake
-      fin.rotation.x = Math.sin(a) * 0.16;
-      rocket.add(fin);
-    }
-    // thruster plume: white-hot core inside an orange sheath
-    const plumeOuter = new THREE.Mesh(
-      new THREE.ConeGeometry(0.1, 0.34, 10),
-      new THREE.MeshBasicMaterial({ color: 0xff8830, transparent: true, opacity: 0.75, blending: THREE.AdditiveBlending, depthWrite: false }),
-    );
-    plumeOuter.rotation.x = Math.PI;
-    plumeOuter.position.y = -0.58;
-    const plumeInner = new THREE.Mesh(
-      new THREE.ConeGeometry(0.05, 0.22, 8),
-      new THREE.MeshBasicMaterial({ color: 0xfff2c0, transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending, depthWrite: false }),
-    );
-    plumeInner.rotation.x = Math.PI;
-    plumeInner.position.y = -0.52;
-    rocket.add(plumeOuter, plumeInner);
+    // the shared rocket — identical to the one on your rack and in flight
+    const rocket = buildRocket({ plume: true });
     rocket.rotation.z = -0.55;   // dynamic launch-angle pose (the spin sells it)
     core = rocket;
   } else if (type === 'turbo') {

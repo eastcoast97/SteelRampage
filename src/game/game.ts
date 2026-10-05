@@ -7,6 +7,7 @@ import { PickupManager, PICKUP_COLORS, type PickupType } from './pickups';
 import { PedManager } from './peds';
 import { CAR_SPECS, BOT_NAMES, type CarSpec } from './specs';
 import { buildCarMesh, makeContactShadow } from '../render/carMesh';
+import { buildRocket } from '../render/rocket';
 import { Effects } from '../render/effects';
 import { Hud } from '../ui/hud';
 import { sfx } from '../audio/sfx';
@@ -714,35 +715,13 @@ export class Game {
           .addScaledVector(up, -0.25)
       : v.position.addScaledVector(fwd, v.spec.size.z + 0.8).addScaledVector(up, 0.35);
 
-    // same design language as the pickup: sleek hull, swept fins, thruster plume
+    // the shared rocket, so the thing flying is visibly the thing that was on
+    // your rack a moment ago — these were three separate meshes and had drifted
+    // into three different-looking weapons
     const mesh = new THREE.Group();
-    const body = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.13, 0.13, 0.85, 10),
-      new THREE.MeshStandardMaterial({ color: 0xe8e4dc, roughness: 0.3, metalness: 0.65 }),
-    );
-    body.rotation.x = Math.PI / 2;
-    const nose = new THREE.Mesh(
-      new THREE.ConeGeometry(0.13, 0.36, 10),
-      new THREE.MeshStandardMaterial({ color: 0xff6a1a, emissive: 0xff4400, emissiveIntensity: 0.7, roughness: 0.35 }),
-    );
-    nose.rotation.x = -Math.PI / 2;
-    nose.position.z = -0.6;
-    mesh.add(body, nose);
-    const finMat = new THREE.MeshStandardMaterial({ color: 0x22202a, roughness: 0.55, metalness: 0.5 });
-    for (let i = 0; i < 4; i++) {
-      const a = (i / 4) * Math.PI * 2;
-      const fin = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.26, 0.16), finMat);
-      fin.position.set(Math.cos(a) * 0.16, Math.sin(a) * 0.16, 0.32);
-      fin.rotation.z = a + Math.PI / 2;
-      mesh.add(fin);
-    }
-    const plume = new THREE.Mesh(
-      new THREE.ConeGeometry(0.09, 0.42, 8),
-      new THREE.MeshBasicMaterial({ color: 0xff8830, transparent: true, opacity: 0.8, blending: THREE.AdditiveBlending, depthWrite: false }),
-    );
-    plume.rotation.x = -Math.PI / 2;
-    plume.position.z = 0.66;
-    mesh.add(plume);
+    const rocket = buildRocket({ plume: true });
+    rocket.rotation.x = -Math.PI / 2;   // nose +Y becomes nose -Z (travel axis)
+    mesh.add(rocket);
     mesh.position.copy(pos);
     this.scene.add(mesh);
 
