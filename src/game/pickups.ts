@@ -46,6 +46,8 @@ interface Pickup {
   ringMat: THREE.MeshBasicMaterial;
   /** light shaft + halo + floor glow that make the socket visible at range */
   beacon: { group: THREE.Group; shaft: THREE.Mesh; halo: THREE.Mesh; glow: THREE.Mesh };
+  /** only the nuke socket gets one — the map-wide "it is over there" marker */
+  bolt?: { group: THREE.Group; mat: THREE.ShaderMaterial };
   active: boolean;
   timer: number;
   /** >0 while playing the acquire implosion */
@@ -79,6 +81,86 @@ const COLORS = PICKUP_COLORS;
  * than something you drove at. The beacon is what makes them a destination; the
  * icon still does the job of saying WHICH pickup it is.
  */
+
+/**
+ * The nuke's signal: a lightning bolt tall enough to see over the buildings,
+ * from anywhere on the map.
+ *
+ * There is exactly ONE nuke and it roams between three sockets, so without a
+ * long-range marker finding it means memorising three coordinates. This is the
+ * Black Ops mystery-box idea: you do not hunt the item, you look up, find the
+ * bolt, and drive at it — and because the bolt moves with the socket, "where is
+ * it right now" stays a live question every respawn.
+ *
+ * Deliberately NOT the normal beacon scaled up. A 5m shaft is a "something is
+ * here" marker read from the street; this is a landmark read from across the
+ * arena, so it is a hard-edged zigzag (a soft column at that height just looks
+ * like fog) with a charge pulse travelling up it.
+ */
+const BOLT_H = 72;      // clears the buildings AND the skyline silhouette
+
+function buildBolt(color: number): { group: THREE.Group; mat: THREE.ShaderMaterial } {
+  const group = new THREE.Group();
+
+  // zigzag ribbon: a vertical strip of quads kinked left/right as it climbs
+  const segs = 9, halfW = 2.8;
+  const verts: number[] = [], uvs: number[] = [], idx: number[] = [];
+  let x = 0;
+  for (let i = 0; i <= segs; i++) {
+    const t = i / segs;
+    const y = t * BOLT_H;
+    if (i > 0) x += (i % 2 ? 1 : -1) * (3.4 - t * 2.0);
+    // taper with height so it reads as a bolt rather than a wall
+    // only a gentle taper: shrinking it toward the top is what made the bolt
+    // fade to nothing at map range, which is the exact distance it exists for
+    const w = halfW * (1 - t * 0.3);
+    verts.push(x - w, y, 0, x + w, y, 0);
+    uvs.push(0, t, 1, t);
+    if (i < segs) {
+      const a = i * 2;
+      idx.push(a, a + 1, a + 2, a + 1, a + 3, a + 2);
+    }
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
+  geo.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+  geo.setIndex(idx);
+
+  const mat = new THREE.ShaderMaterial({
+    uniforms: { uColor: { value: new THREE.Color(color) }, uTime: { value: 0 }, uFade: { value: 1 } },
+    vertexShader: `
+      varying vec2 vUv;
+      void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }
+    `,
+    fragmentShader: `
+      uniform vec3 uColor; uniform float uTime; uniform float uFade;
+      varying vec2 vUv;
+      void main() {
+        // bright core down the middle of the strip, fading to the edges
+        float core = 1.0 - abs(vUv.x - 0.5) * 2.0;
+        core = pow(core, 1.6);
+        // thins out with height, so the bolt does not end in a hard line
+        float rise = mix(1.0, pow(1.0 - vUv.y, 0.9), 0.55);
+        // charge pulse running upward
+        float pulse = smoothstep(0.16, 0.0, abs(fract(uTime * 0.42) - vUv.y));
+        float a = core * rise * (0.85 + pulse * 1.5) * uFade;
+        gl_FragColor = vec4(mix(uColor, vec3(1.0), pulse * 0.6), a);
+      }
+    `,
+    transparent: true, depthWrite: false, side: THREE.DoubleSide,
+    blending: THREE.AdditiveBlending,
+  });
+
+  // two crossed copies so the bolt has no viewing angle where it vanishes
+  for (const rot of [0, Math.PI / 2]) {
+    const m = new THREE.Mesh(geo, mat);
+    m.rotation.y = rot;
+    m.renderOrder = 7;
+    group.add(m);
+  }
+  return { group, mat };
+}
+
 function buildBeacon(color: number): { group: THREE.Group; shaft: THREE.Mesh; halo: THREE.Mesh; glow: THREE.Mesh } {
   const group = new THREE.Group();
   const add = (o: THREE.Object3D) => { group.add(o); return o; };
@@ -230,9 +312,15 @@ export class PickupManager {
       const beacon = buildBeacon(PICKUP_COLORS[p.type]);
       beacon.group.position.copy(p.pos);
       scene.add(beacon.group);
+      let bolt: Pickup['bolt'];
+      if (p.type === 'nuke') {
+        bolt = buildBolt(PICKUP_COLORS.nuke);
+        bolt.group.position.copy(p.pos);
+        scene.add(bolt.group);
+      }
       this.pickups.push({
         type: p.type, pos: p.pos.clone(), alts: p.alts,
-        mesh, ring, ringMat, beacon, active: true, timer: 0, shrinkT: 0, popT: 0,
+        mesh, ring, ringMat, beacon, bolt, active: true, timer: 0, shrinkT: 0, popT: 0,
       });
     }
   }
@@ -258,6 +346,14 @@ export class PickupManager {
       if (!p.active) {
         p.timer -= dt;
         p.beacon.group.visible = false;
+        if (p.bolt) {
+          // the bolt stays up while the nuke respawns, dimmed and charging —
+          // hiding it would hide the one landmark telling you where to be when
+          // it comes back, which is most of its value
+          p.bolt.group.visible = true;
+          p.bolt.mat.uniforms.uTime.value = this.time;
+          p.bolt.mat.uniforms.uFade.value = 0.14;
+        }
         // socket ring brightens as respawn approaches
         p.ringMat.opacity = 0.08 + 0.25 * (1 - Math.min(1, p.timer / RESPAWN_TIME[p.type]));
         if (p.timer <= 0) {
@@ -273,6 +369,8 @@ export class PickupManager {
             p.pos.copy(next);
             p.mesh.position.copy(next);
             p.ring.position.set(next.x, next.y - 0.75, next.z);
+            p.beacon.group.position.copy(next);
+            p.bolt?.group.position.copy(next);
           }
           // TYPE SHUFFLE: sockets cycle through the weighted pool on respawn
           // so weapon locations can't be farmed by memory (overdrive keeps
@@ -306,6 +404,15 @@ export class PickupManager {
       const pulse = 0.82 + Math.sin(this.time * 2.0 + p.pos.x) * 0.18;
       (b.shaft.material as THREE.ShaderMaterial).uniforms.uFade.value = pulse;
       (b.glow.material as THREE.MeshBasicMaterial).opacity = 0.16 + pulse * 0.1;
+      if (p.bolt) {
+        p.bolt.group.visible = true;
+        p.bolt.mat.uniforms.uTime.value = this.time;
+        // crackle: mostly bright with occasional dropouts, so it flickers like
+        // a bolt instead of breathing like the ordinary beacons
+        const flick = 0.8 + Math.sin(this.time * 17.3) * 0.12 + Math.sin(this.time * 5.1) * 0.08;
+        p.bolt.mat.uniforms.uFade.value = flick;
+        p.bolt.group.rotation.y += dt * 0.25;
+      }
 
       for (const v of vehicles) {
         if (!v.alive) continue;

@@ -40,7 +40,12 @@ weapon identically and asymptotes — armor can never reach immunity.
 below and the only thing that outranks a missile. Pickup only, capacity 1, no overdrive
 multiplier — overdrive scales the weapons you use repeatedly, and 48 piercing is
 already the game's ceiling. Unguided and slow (`NUKE_SPEED` 30 m/s) so it is a
-read-and-dodge weapon, not a sniper rifle. `NUKE_FUSE` (3.2) is the proximity
+read-and-dodge weapon, not a sniper rifle. **It has no lock in any sense**: it
+ignores `lockTarget`, flies dead straight (measured: 3 cm of lateral drift over
+70 m with a hard lock on a target 14 m off-axis), and never trips the victim's
+incoming-missile alarm. Lock-on itself now requires a missile to lock FOR —
+`updateLock` early-outs on an empty rack, so the reticle no longer runs for a
+weapon you are not carrying. `NUKE_FUSE` (3.2) is the proximity
 radius AND feeds the full-damage band through `explosionAt`'s `directR` — **a
 weapon's direct-hit band must be ≥ its fuse radius** or every "direct" hit is
 quietly scaled down by falloff and the weapon never deals its stated damage.

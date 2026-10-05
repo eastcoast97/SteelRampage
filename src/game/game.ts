@@ -602,12 +602,17 @@ export class Game {
 
   /** cone-acquisition lock-on state machine (see LOCK_* constants) */
   private updateLock(v: Vehicle, dt: number) {
-    if (!v.alive) {
+    // Lock-on exists for ONE reason: it upgrades a missile from 26 to 34. With
+    // an empty rack it is a reticle over a weapon you do not have — and when the
+    // nuke is the only thing you are carrying it reads as the NUKE locking on,
+    // which it never does (it is unguided and ignores lockTarget entirely).
+    if (!v.alive || v.missiles <= 0) {
       v.lockTarget = null;
       v.lockCandidate = null;
       v.lockProgress = 0;
       return;
     }
+
     const pos = v.position;
     const fwd = v.forward;
 
