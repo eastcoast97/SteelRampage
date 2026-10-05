@@ -11,6 +11,7 @@ import { buildRocket } from '../render/rocket';
 import { buildMine } from '../render/mine';
 import { buildNuke } from '../render/nuke';
 import { buildShield } from '../render/shield';
+import type { ReaperResult } from '../render/reaper';
 import { Effects } from '../render/effects';
 import { Hud } from '../ui/hud';
 import { sfx } from '../audio/sfx';
@@ -71,6 +72,17 @@ const SLAM_DAMAGE = 22;
 // the ring the player SEES is drawn to this too (effects.shockwave) — the reach
 // and the visual used to be separate literals and could drift apart
 const SLAM_RADIUS = 12.1;
+// REAPER's saw. Sits in the nuke's tier rather than the special tier: it is
+// ARMOR-PIERCING and above the locked missile, because unlike every other
+// special it cannot be earned by kills or picked up — the only way to charge it
+// is to ride a wheelie in a straight line with the blade on the tarmac, which
+// is several seconds of going slow and predictable in the open on the thinnest
+// skin in the game. The reward for that has to be worth the exposure, and being
+// the one thing a JUGGERNAUT is actually afraid of is that reward.
+const SAW_DAMAGE = 36;
+const SAW_RANGE = 9.5;
+const SAW_CHARGE_TIME = 5.0;     // seconds of continuous grinding for a full bar
+const SAW_GRIND_MIN_SPEED = 7;   // below this the blade is not biting
 const FLAME_DPS = 20;
 const TURRET_SHOT = 2.0;
 const MINIGUN_SHOT = 3.5;
@@ -311,12 +323,20 @@ export class Game {
 
   private spawnVehicle(spec: CarSpec, pos: THREE.Vector3, yaw: number, name: string, isBot: boolean, color?: number): Vehicle {
     const v = new Vehicle(this.world, spec, pos, yaw, name, isBot);
-    const { group, wheels, wheelRadius, chassis, loadout } = buildCarMesh(spec, color);
+    const built = buildCarMesh(spec, color);
+    const { group, wheels, wheelRadius, chassis, loadout } = built;
     v.mesh = group;
     v.wheels = wheels;
     v.visualWheelRadius = wheelRadius;
     v.chassis = chassis;
     v.loadout = loadout;
+    if ('sawArm' in built) {
+      const r = built as ReaperResult;
+      v.sawTip = r.sawTip;
+      v.sawArm = r.sawArm;
+      v.sawBar = r.sawBar;
+      v.rider = r.rider;
+    }
     // shield: hex-cell energy field hugging the car (mostly invisible —
     // the hex lattice reads on the rim, flares white when it eats a hit)
     const shield = buildShield(spec.size.z * 1.55, makeHexFieldTexture());
@@ -477,6 +497,7 @@ export class Game {
       this.player.input.fireMissile = input.fireMissile;
       this.player.input.dropMine = input.dropMine;
       this.player.input.special = input.consumeSpecial();
+      this.player.input.specialHeld = input.specialHeld;
       if (input.consumeNuke()) this.player.input.fireNuke = true;
       if (input.consumeFlip()) this.player.unflip();
 
@@ -936,6 +957,11 @@ export class Game {
   private handleSpecial(v: Vehicle, dt: number) {
     const id = v.spec.specialId;
 
+    // REAPER does not use the window economy at all: there is nothing to earn
+    // and nothing to re-trigger, just a bar you fill with the blade on the road
+    // and spend in one swing.
+    if (id === 'chainsaw') { this.handleSaw(v, dt); return; }
+
     // activation — a full bar opens a 45s WINDOW during which the special is
     // freely re-usable (short per-special cooldown between bursts). The HUD
     // shows the countdown next to the special bar.
@@ -978,7 +1004,7 @@ export class Game {
       if (id === 'dash') this.tickDash(v, dt);
       else if (id === 'flame') this.tickFlame(v, dt);
       else if (id === 'turret') this.tickTurret(v, dt);
-      else if (id === 'minetrail') this.tickMineTrail(v, dt);
+
     }
   }
 
@@ -1013,20 +1039,100 @@ export class Game {
       v.health = Math.min(v.spec.maxHealth, v.health + 45);
       this.effects.sparks(v.position, 22, 0x3aff6e);
       if (v === this.player) sfx.pickup();
-    } else if (id === 'minetrail') {
-      v.specialActiveTime = 0.65;
-      v.turretTimer = 0; // reuse as drop cadence
     }
     // hard design invariant: NO special may stay active longer than 45s
     // (bombs self-detonate at 4s; this guards future specials too)
     v.specialActiveTime = Math.min(v.specialActiveTime, 45);
   }
 
-  private tickMineTrail(v: Vehicle, dt: number) {
-    v.turretTimer -= dt;
-    if (v.turretTimer > 0) return;
-    v.turretTimer = 0.22;
-    this.spawnMineFrom(v);
+  /**
+   * REAPER's saw: grind to charge, swing to spend.
+   *
+   * Held special = wheelie and drag the blade. That is the entire charge
+   * mechanic, and it is meant to be a commitment — you are slow, pointing in
+   * one direction, and lit up by your own sparks while you do it.
+   */
+  private handleSaw(v: Vehicle, dt: number) {
+    const speed = v.forwardSpeed;
+    const grinding = v.input.specialHeld && v.grounded && speed > SAW_GRIND_MIN_SPEED
+      && v.specialEnergy < 1 && v.alive;
+
+    if (grinding) {
+      v.specialEnergy = Math.min(1, v.specialEnergy + dt / SAW_CHARGE_TIME);
+      v.sawGrind = Math.min(1, v.sawGrind + dt * 4);
+      v.spawnProtection = 0;
+      // lift the nose by shoving UP at the front axle rather than torquing the
+      // body: an impulse at a point can't spin the bike if the suspension is
+      // already loaded, which a raw torque very much can
+      const front = _v2.copy(v.position).addScaledVector(v.forward, v.spec.size.z * 0.95);
+      const lift = 2.6 * v.body.mass() * dt;
+      v.body.applyImpulseAtPoint({ x: 0, y: lift, z: 0 },
+        { x: front.x, y: front.y, z: front.z }, true);
+      // the blade is eating the road
+      if (v.sawTip) {
+        const tip = v.sawTip(_v3);
+        tip.y = Math.max(0.08, tip.y);
+        this.effects.grindSparks(tip, v.forward, Math.min(1, speed / 22));
+      }
+      if (v === this.player) sfx.sawGrind(Math.min(1, speed / 22));
+    } else {
+      v.sawGrind = Math.max(0, v.sawGrind - dt * 3);
+      // partial charge bleeds away, a full bar does not — you earned that
+      if (v.specialEnergy < 1) v.specialEnergy = Math.max(0, v.specialEnergy - dt * 0.05);
+      if (v === this.player) sfx.sawGrind(0);
+    }
+
+    v.sawSwing = Math.max(0, v.sawSwing - dt);
+
+    if (v.input.special) {
+      v.input.special = false;
+      if (v.specialEnergy >= 1 && v.sawSwing <= 0) {
+        this.doSawSlam(v);
+      } else if (v === this.player) {
+        this.hud.toast(`SAW ${Math.floor(v.specialEnergy * 100)}% — GRIND TO CHARGE`, '#8a7f96');
+      }
+    }
+  }
+
+  private doSawSlam(v: Vehicle) {
+    v.specialEnergy = 0;
+    v.sawSwing = 0.45;
+    v.spawnProtection = 0;
+    const fwd = v.forward;
+    const reach = _v2.copy(v.position).addScaledVector(fwd, SAW_RANGE * 0.55);
+
+    if (this.netOpts?.role === 'host') {
+      this.netEvents.push({ k: 'saw', x: +reach.x.toFixed(1), y: +reach.y.toFixed(1), z: +reach.z.toFixed(1) });
+    }
+    this.effects.sawSlam(reach, fwd);
+    sfx.sawSlam(THREE.MathUtils.clamp(1.4 - reach.distanceTo(this.player.position) / 60, 0.2, 1.2));
+    this.effects.trauma = Math.min(1, this.effects.trauma + 0.5);
+
+    // a short wide arc in front, not a radius around the bike — you have to be
+    // facing what you want to cut
+    let best: Vehicle | null = null, bestD = Infinity;
+    for (const e of this.vehicles) {
+      if (e === v || !e.alive) continue;
+      _v1.copy(e.position).sub(v.position);
+      const d = _v1.length();
+      if (d > SAW_RANGE) continue;
+      if (fwd.dot(_v1.normalize()) < 0.35) continue;   // ~110 degree arc
+      if (d < bestD) { bestD = d; best = e; }
+    }
+    if (!best) return;
+
+    // ARMOR-PIERCING, like the nuke and for the same reason: it is the payoff
+    // for a long exposed charge and must not be worst against the heavy
+    const killed = best.takeDamage(SAW_DAMAGE, v, this.time, true);
+    _v1.copy(best.position).sub(v.position).normalize();
+    _v1.y = 0.55;
+    _v1.normalize();
+    const imp = 7 * best.body.mass();
+    best.body.applyImpulse({ x: _v1.x * imp, y: _v1.y * imp, z: _v1.z * imp }, true);
+    this.effects.sparks(best.position, 26, 0xffb060);
+    if (best === this.player) this.hud.showDamage(0.6);
+    if (v === this.player) this.hud.showHitmarker();
+    if (killed) this.onKill(v, best);
   }
 
   private tickDash(v: Vehicle, dt: number) {
@@ -1836,6 +1942,25 @@ export class Game {
       // post-spawn invulnerability: blink the car so it reads as protected
       if (v.mesh && v.alive) {
         v.mesh.visible = v.spawnProtection > 0 ? Math.floor(this.time * 9) % 2 === 0 : true;
+      }
+      // REAPER: the saw drops to the road while grinding and swings across on
+      // the slam. Driven here rather than in vehicle.syncVisual because the
+      // swing is a game event with a timer, not a function of the body's state.
+      if (v.sawArm && v.sawBar) {
+        const g = v.sawGrind;
+        if (v.sawSwing > 0) {
+          // 0 at the start of the swing, 1 at the end
+          const t = 1 - v.sawSwing / 0.45;
+          // whips down and across, then settles back to the carry pose
+          const arc = Math.sin(Math.min(1, t * 1.7) * Math.PI);
+          v.sawArm.rotation.set(-0.5 + arc * 1.5, -arc * 1.5, -0.5 + arc * 0.9);
+        } else {
+          // carry pose at rest, dropped and levelled to the tarmac while grinding
+          v.sawArm.rotation.set(-0.5 + g * 1.42, g * 0.26, -0.5 + g * 0.42);
+        }
+        // the chain only runs when it is working
+        if (g > 0.02 || v.sawSwing > 0) v.sawBar.rotation.z += dt * (26 + g * 40);
+        if (v.rider) v.rider.rotation.x = -g * 0.22;   // leans back on the wheelie
       }
       if (v.shieldMesh && v.shieldMat) {
         v.shieldMesh.visible = v.alive && v.shieldTime > 0;

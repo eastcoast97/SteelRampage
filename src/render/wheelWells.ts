@@ -40,7 +40,6 @@ const WELLS: Partial<Record<CarSpec['build'], WheelWell>> = {
   suv: { axleZ: [-0.694, 0.594], trackX: 0.615, hubY: 0.246 },
   hearse: { axleZ: [-0.654, 0.595], trackX: 0.643, hubY: 0.246 },
   ambulance: { axleZ: [-0.618, 0.566], trackX: 0.654, hubY: 0.246 },
-  taxi: { axleZ: [-0.618, 0.523], trackX: 0.652, hubY: 0.247 },
   // cut in phase 3.2 by the older per-model script, same 0.26 radius fraction
   muscle: { axleZ: [-0.579, 0.579], trackX: 0.857, hubY: 0.247 },
 };

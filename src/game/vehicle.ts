@@ -11,6 +11,9 @@ export interface VehicleInput {
   fireMissile: boolean;
   dropMine: boolean;
   special: boolean;
+  /** HELD state of the same button. REAPER charges its saw for as long as this
+   *  is down, so it needs the level, not just the edge. */
+  specialHeld: boolean;
   /** edge-triggered: set true for ONE step per press. A nuke is a single shot
    *  and a held key must never spend it twice. */
   fireNuke: boolean;
@@ -48,7 +51,7 @@ export class Vehicle {
   alive = true;
   respawnTimer = 0;
 
-  input: VehicleInput = { throttle: 0, steer: 0, handbrake: false, turbo: false, fireMG: false, fireMissile: false, dropMine: false, special: false, fireNuke: false };
+  input: VehicleInput = { throttle: 0, steer: 0, handbrake: false, turbo: false, fireMG: false, fireMissile: false, dropMine: false, special: false, specialHeld: false, fireNuke: false };
 
   mgCooldown = 0;
   missileCooldown = 0;
@@ -62,6 +65,16 @@ export class Vehicle {
   minesAmmo = 0;
   nukes = 0;
   nukeCooldown = 0;
+  /** REAPER only — 0..1 eased, how far the blade is down on the road */
+  sawGrind = 0;
+  /** REAPER only — counts down through the slam animation */
+  sawSwing = 0;
+  /** REAPER only — world position of the blade tip (set from the mesh) */
+  sawTip: ((out: THREE.Vector3) => THREE.Vector3) | null = null;
+  /** REAPER only — animated pivots (see render/reaper.ts) */
+  sawArm: THREE.Object3D | null = null;
+  sawBar: THREE.Object3D | null = null;
+  rider: THREE.Object3D | null = null;
   shieldMesh: THREE.Mesh | null = null;
   /** material of the shield field — its uniforms are driven in Game.render */
   shieldMat: THREE.ShaderMaterial | null = null;
@@ -457,7 +470,9 @@ export class Vehicle {
     }
     // armor mitigation: percentage reduction with diminishing returns.
     // effectiveHP = 100 * (1 + armor/100); armor never zeroes out chip damage.
-    if (!pierce) amount *= 100 / (100 + this.spec.armor);
+    // armor may be negative (REAPER); clamp so the divisor can never reach or
+    // cross zero and flip the sign of the damage
+    if (!pierce) amount *= 100 / Math.max(10, 100 + this.spec.armor);
     this.health -= amount;
     this.onDamage?.(this, amount, attacker);
     if (attacker && attacker !== this) {
@@ -493,6 +508,8 @@ export class Vehicle {
     this.minesAmmo = 0;
     this.nukes = 0;
     this.nukeCooldown = 0;
+    this.sawGrind = 0;
+    this.sawSwing = 0;
     this.body.setTranslation({ x: pos.x, y: pos.y, z: pos.z }, true);
     this.body.setRotation(quatFromYaw(yaw), true);
     this.body.setLinvel({ x: 0, y: 0, z: 0 }, true);

@@ -159,6 +159,7 @@ export class BotController {
     v.input.fireMissile = false;
     v.input.dropMine = false;
     v.input.special = false;
+    v.input.specialHeld = false;
     v.input.fireNuke = false;
     // drop a mine when someone is chasing close behind
     if (v.minesAmmo > 0 && v.mineCooldown <= 0) {
@@ -213,11 +214,18 @@ export class BotController {
           (id === 'slam' && tDist < 9) ||
           (id === 'bomb' && facing > 0.7 && tDist < 30) ||
           (id === 'repair' && v.health < v.spec.maxHealth * 0.55) ||
-          (id === 'minetrail' && facing < -0.5 && tDist < 18)
+          (id === 'chainsaw' && facing > 0.6 && tDist < 8)
         ) {
           v.input.special = true;
         }
       }
+      // REAPER: charge the saw by grinding when nothing is close enough to cut,
+      // then stop grinding and close in once the bar is full. A bot that kept
+      // holding it would wheelie straight past the target it just charged for.
+      if (v.spec.specialId === 'chainsaw') {
+        v.input.specialHeld = v.specialEnergy < 1 && tDist > 18 && facing > 0.55;
+      }
+
       // minigun special is only useful if actually shooting
       if (v.spec.specialId === 'minigun' && v.specialActiveTime > 0 && tDist < 55 && facing > 0.88) {
         v.input.fireMG = true;

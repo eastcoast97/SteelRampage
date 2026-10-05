@@ -63,6 +63,9 @@ export class Input {
    *  special would e.g. instantly detonate a just-launched remote bomb) */
   consumeSpecial() { const s = this.specialPressed; this.specialPressed = false; return s; }
 
+  /** level, not edge — REAPER charges its saw for as long as this is down */
+  get specialHeld() { return this.down('KeyE') || this.mouseButtons.has(2); }
+
   /** likewise one-shot: you carry a single nuke and a held key must not spend
    *  it the instant you pick the next one up */
   consumeNuke() { const n = this.nukePressed; this.nukePressed = false; return n; }

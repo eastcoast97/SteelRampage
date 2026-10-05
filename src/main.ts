@@ -20,7 +20,8 @@ import { NetClient, GuestSync, serializeSnapshot } from './net/net';
 
 // per-archetype engine audio: sports = screaming exotic, v8 = deep muscle, rally = punchy
 const ENGINE_KIND: Record<CarSpec['build'], EngineKind> = {
-  speed: 'sports', sports: 'sports', taxi: 'sports',
+  speed: 'sports', sports: 'sports',
+  bike: 'sports',          // a two-stroke scream is the closest of the three
   muscle: 'rally',
   tank: 'v8', suv: 'v8', ambulance: 'v8', hearse: 'v8',
 };
@@ -710,6 +711,7 @@ async function boot() {
           v.input.fireMG = !!d.mg;
           v.input.fireMissile = !!d.mi;
           v.input.dropMine = !!d.mn;
+          v.input.specialHeld = !!d.sh;   // REAPER grinds for as long as this is held
           if (d.ts) v.lastInputTs = d.ts;   // echoed in snapshots → guest RTT
           if (remoteSpecial.has(idx)) {
             v.input.special = true;
@@ -753,7 +755,7 @@ async function boot() {
         d: {
           th: input.throttle, st: input.steer, hb: input.handbrake, tu: input.turbo,
           mg: input.fireMG, mi: input.fireMissile, mn: input.dropMine, sp: input.consumeSpecial(),
-          nk: input.consumeNuke(),
+          nk: input.consumeNuke(), sh: input.specialHeld,
           ts: Math.round(performance.now()),
         },
       });

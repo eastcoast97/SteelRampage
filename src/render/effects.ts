@@ -88,6 +88,7 @@ export class Effects {
 
   private scratchColor = new THREE.Color();
   private scratchVec = new THREE.Vector3();
+  private scratchVec2 = new THREE.Vector3();
 
   constructor(scene: THREE.Scene) {
     for (let i = 0; i < MAX_ADDITIVE + MAX_ALPHA; i++) this.particles.push(makeParticle());
@@ -276,6 +277,64 @@ export class Effects {
           cell: CELL_SMOKE_0 + Math.floor(Math.random() * CELL_SMOKE_N),
           gravity: -2.0, drag: 1.9, spin: (Math.random() - 0.5) * 1,
           opacity: 0.38, fadeIn: 1 });
+    }
+  }
+
+  /**
+   * Sparks thrown off a chainsaw bar dragged along tarmac.
+   *
+   * Grinding steel on road throws a FAN, not a puff: the particles leave along
+   * the blade's travel, fast and nearly flat, then arc over. They are emitted
+   * backwards relative to the bike because the road is moving backwards under
+   * the blade — throwing them forward reads as a weapon firing rather than
+   * something being dragged.
+   */
+  grindSparks(at: THREE.Vector3, fwd: THREE.Vector3, intensity: number) {
+    const n = 2 + Math.floor(intensity * 4);
+    for (let i = 0; i < n; i++) {
+      const spray = (Math.random() - 0.5) * 1.3;
+      const v = this.scratchVec2
+        .copy(fwd).multiplyScalar(-(9 + Math.random() * 14 * intensity));
+      v.x += -fwd.z * spray; v.z += fwd.x * spray;
+      v.y = 1.5 + Math.random() * 4.5;
+      this.emit(at, v,
+        { life: 0.3 + Math.random() * 0.35, sizeFrom: 0.16, sizeTo: 0.05,
+          from: 0xfff0b0, to: 0xff4a08, cell: CELL_SPARK,
+          gravity: 16, drag: 0.5, spin: 0, opacity: 1 });
+    }
+    // the blade itself glowing where it bites
+    this.emit(at, this.scratchVec2.set(0, 1.2, 0),
+      { life: 0.16, sizeFrom: 0.5 + intensity * 0.4, sizeTo: 0.1,
+        from: 0xffd080, to: 0xff5a10, cell: CELL_GLOW,
+        gravity: 0, drag: 2, spin: 0, opacity: 0.8 });
+    // scorch smoke off the tarmac
+    if (Math.random() < 0.35) {
+      this.emit(at, this.scratchVec2.copy(fwd).multiplyScalar(-3).setY(2.2),
+        { layer: 1, life: 0.7 + Math.random() * 0.5, sizeFrom: 0.3, sizeTo: 1.6,
+          from: 0x3a352f, to: 0x14141a,
+          cell: CELL_SMOKE_0 + Math.floor(Math.random() * CELL_SMOKE_N),
+          gravity: -1.4, drag: 1.6, spin: (Math.random() - 0.5), opacity: 0.35, fadeIn: 1 });
+    }
+  }
+
+  /** the saw coming down: a short hot arc plus a burst where it lands */
+  sawSlam(at: THREE.Vector3, fwd: THREE.Vector3) {
+    this.emit(at, this.scratchVec2.set(0, 0, 0),
+      { life: 0.3, sizeFrom: 0.6, sizeTo: 7, from: 0xfff0d0, to: 0xc23a06,
+        cell: CELL_RING, opacity: 0.85, flat: true });
+    for (let i = 0; i < 34; i++) {
+      const a = (i / 34) * Math.PI * 2;
+      const v = this.scratchVec2.set(Math.cos(a) * 11, 2 + Math.random() * 7, Math.sin(a) * 11);
+      v.addScaledVector(fwd, 6);
+      this.emit(at, v,
+        { life: 0.35 + Math.random() * 0.3, sizeFrom: 0.2, sizeTo: 0.06,
+          from: 0xfff2c0, to: 0xff3a08, cell: CELL_SPARK, gravity: 17, drag: 0.6, opacity: 1 });
+    }
+    for (let i = 0; i < 8; i++) {
+      this.emit(at, randomDir().multiplyScalar(4).setY(2 + Math.random() * 3),
+        { life: 0.4 + Math.random() * 0.3, sizeFrom: 0.5, sizeTo: 2.2,
+          from: 0xffb060, to: 0x5a2a10, cell: CELL_FIRE_0, cells: CELL_FIRE_N,
+          gravity: -2, drag: 2.2, spin: (Math.random() - 0.5) * 2 });
     }
   }
 

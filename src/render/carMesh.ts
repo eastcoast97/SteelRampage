@@ -3,9 +3,10 @@ import type { CarSpec } from '../game/specs';
 import { getCarModel, getTintedTexture, getWeatheredStockTexture, AUTHORED_TEXTURES, WHEELS_BAKED_IN } from './carModels';
 import { getWheelWell, WELL_RADIUS_FRAC, WELL_FILL } from './wheelWells';
 import { buildLoadout, type Loadout } from './loadout';
+import { buildReaper } from './reaper';
 
 /** models whose stock paint IS their identity (police livery, ambulance, taxi) */
-const KEEP_STOCK_PAINT = new Set<CarSpec['build']>(['suv', 'ambulance', 'taxi']);
+const KEEP_STOCK_PAINT = new Set<CarSpec['build']>(['suv', 'ambulance']);
 
 let aoTexture: THREE.CanvasTexture | null = null;
 let carScratchMap: THREE.CanvasTexture | null = null;
@@ -320,13 +321,10 @@ function buildFromModel(spec: CarSpec, model: { body: THREE.Group; wheel: THREE.
   } else if (spec.build === 'ambulance') {
     lightRack(roofY + 0.1, -sz * 0.25, sx * 1.35, [0xff3030, 0xffffff, 0xffffff, 0x3060ff]);
     box(sx * 1.6, 0.3, 0.1, steelMat, 0, -sy + 0.42, -sz - 0.12, -0.35); // bull bar
-  } else if (spec.build === 'taxi') {
-    box(0.7, 0.22, 0.34, rustMat, 0, roofY + 0.12, sz * 0.5);            // rear mine dispenser
-    box(0.5, 0.1, 0.1, darkMat, 0, hoodY - 0.1, sz + 0.2);               // drop chute
   }
 
   // --- wheel hub spikes (the TM signature) — skip the civic-liveried builds ---
-  const spikey = !['ambulance', 'taxi'].includes(spec.build);
+  const spikey = spec.build !== 'ambulance';
 
   // --- wheels from the kit, mounted on our steer/spin rig ---
   const wheels: THREE.Object3D[] = [];
@@ -383,6 +381,10 @@ function buildFromModel(spec: CarSpec, model: { body: THREE.Group; wheel: THREE.
 }
 
 export function buildCarMesh(spec: CarSpec, colorOverride?: number): CarMeshResult {
+  // REAPER is authored in code, not generated: its saw and rider need their own
+  // pivots and the AI bodies are single fused shells that cannot be posed.
+  if (spec.build === 'bike') return buildReaper(spec, colorOverride);
+
   const model = getCarModel(spec.build);
   if (model) return buildFromModel(spec, model);
 
@@ -562,10 +564,11 @@ export function buildCarMesh(spec: CarSpec, colorOverride?: number): CarMeshResu
   box(tailMat, sx * 0.5, 0.14, 0.07, sx * 0.55, baseY + 0.45, sz + 0.05);
 
   // roof-mounted machine gun
-  const gunHeights: Record<CarSpec['build'], number> = {
-    speed: 0.98, muscle: 1.24, sports: 0.95, suv: 1.66, tank: 2.06, hearse: 1.44, ambulance: 1.66, taxi: 1.24,
+  // 'bike' never reaches this path (REAPER is built in render/reaper.ts)
+  const gunHeights: Partial<Record<CarSpec['build'], number>> = {
+    speed: 0.98, muscle: 1.24, sports: 0.95, suv: 1.66, tank: 2.06, hearse: 1.44, ambulance: 1.66,
   };
-  const gunY = baseY + gunHeights[spec.build];
+  const gunY = baseY + (gunHeights[spec.build] ?? 1.2);
   const gunZ = spec.build === 'tank' ? -sz * 0.55 : sz * 0.25;
   box(darkMat, 0.4, 0.3, 0.4, 0, gunY, gunZ);
   for (const off of [-0.07, 0.07]) {

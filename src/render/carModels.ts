@@ -25,14 +25,13 @@ const MODEL_YAW: Partial<Record<CarSpec['build'], number>> = {
   tank: -Math.PI / 2,
   hearse: -Math.PI / 2,
   ambulance: -Math.PI / 2,
-  taxi: -Math.PI / 2,
 };
 
 /** Builds whose GLB ships its own authored PBR textures (AI-generated or
  *  hand-authored). Their materials must be left ALONE — no palette retint, no
  *  shared scratch roughness map, or we'd paint over the real maps. */
 export const AUTHORED_TEXTURES = new Set<CarSpec['build']>([
-  'speed', 'muscle', 'sports', 'suv', 'tank', 'hearse', 'ambulance', 'taxi',
+  'speed', 'muscle', 'sports', 'suv', 'tank', 'hearse', 'ambulance',
 ]);
 /** Builds whose GLB already contains wheels, so the steer/spin rig must not
  *  mount a second set on top. (The AI muscle body had its wheels boolean-cut
@@ -50,7 +49,9 @@ const WHEEL_YAW_BY_FILE: Record<string, number> = {
 // Higgsfield-generated photoreal bodies, wheels boolean-cut out in Blender
 // (see docs/BLENDER.md + tools/blender/autocut_wheels.py). A missing file
 // degrades that one build to its procedural mesh.
-const BODY_FILES: Record<CarSpec['build'], string> = {
+// Partial: REAPER ('bike') is authored in code (render/reaper.ts), so it has no
+// GLB at all and must not be looked up here.
+const BODY_FILES: Partial<Record<CarSpec['build'], string>> = {
   speed: 'viper-ai',
   muscle: 'hellcat-ai',
   sports: 'scorch-ai',
@@ -58,11 +59,10 @@ const BODY_FILES: Record<CarSpec['build'], string> = {
   tank: 'juggernaut-ai',
   hearse: 'mortis-ai',
   ambulance: 'medic-ai',
-  taxi: 'jackrabbit-ai',
 };
 
 // the AI spiked armored wheel is generic enough to serve the whole fleet
-const WHEEL_FILES: Record<CarSpec['build'], string> = {
+const WHEEL_FILES: Partial<Record<CarSpec['build'], string>> = {
   speed: 'hellcat-wheel',
   muscle: 'hellcat-wheel',   // AI-generated spiked armored wheel
   sports: 'hellcat-wheel',
@@ -70,7 +70,6 @@ const WHEEL_FILES: Record<CarSpec['build'], string> = {
   tank: 'hellcat-wheel',
   hearse: 'hellcat-wheel',
   ambulance: 'hellcat-wheel',
-  taxi: 'hellcat-wheel',
 };
 
 let library: Map<string, CarModel> | null = null;
@@ -186,11 +185,11 @@ export async function loadCarModels(): Promise<void> {
 
   try {
     const builds = Object.keys(BODY_FILES) as CarSpec['build'][];
-    const wheelNames = [...new Set(Object.values(WHEEL_FILES))];
+    const wheelNames = [...new Set(Object.values(WHEEL_FILES))] as string[];
     const [bodies, wheels, bldg, arena, docks] = await Promise.all([
       // per-body catch: one missing/!corrupt body degrades that single build to
       // the procedural mesh instead of taking the whole library down
-      Promise.all(builds.map((b) => load(BODY_FILES[b]).catch(() => null))),
+      Promise.all(builds.map((b) => load(BODY_FILES[b]!).catch(() => null))),
       // a missing wheel file must not take the whole car library down with it
       Promise.all(wheelNames.map((w) => load(w).catch(() => null))),
       // arena assets authored in Blender — failure here must not block cars
@@ -234,7 +233,7 @@ export async function loadCarModels(): Promise<void> {
       // Z extent, so the model must already have its length on Z)
       const yaw = MODEL_YAW[b];
       if (yaw) body.rotation.y = yaw;
-      const wheel = wheelByName.get(WHEEL_FILES[b]) ?? wheelByName.get('wheel-default');
+      const wheel = wheelByName.get(WHEEL_FILES[b]!) ?? wheelByName.get('wheel-default');
       if (wheel) library!.set(b, { body, wheel });
     });
   } catch (err) {

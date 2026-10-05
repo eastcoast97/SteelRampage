@@ -40,6 +40,10 @@ const ENGINE_BASE_HZ = 211;
 class Sfx {
   private ctx: AudioContext | null = null;
   private master: GainNode | null = null;
+  // the grind is one continuous source whose level is steered (see sawGrind)
+  private grindSrc: AudioBufferSourceNode | null = null;
+  private grindGain: GainNode | null = null;
+  private grindFilter: BiquadFilterNode | null = null;
   private noiseBuf: AudioBuffer | null = null;
   // continuous road voices, started once and driven by gain/filter from then on
   private windGain: GainNode | null = null;
@@ -387,6 +391,58 @@ class Sfx {
     o.connect(g).connect(this.master);
     o.start(t);
     o.stop(t + 0.12);
+  }
+
+  /**
+   * REAPER's blade on the tarmac — a SUSTAINED grind, so it is one long-lived
+   * noise source whose level is steered, not a sound re-triggered per frame.
+   * Re-triggering would machine-gun the attack envelope and sound like a drum
+   * roll instead of a drag.
+   */
+  sawGrind(intensity: number) {
+    if (!this.ctx || !this.master) return;
+    if (!this.grindSrc) {
+      const len = Math.floor(this.ctx.sampleRate * 2);
+      const buf = this.ctx.createBuffer(1, len, this.ctx.sampleRate);
+      const d = buf.getChannelData(0);
+      for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+      const src = this.ctx.createBufferSource();
+      src.buffer = buf;
+      src.loop = true;
+      // band-passed noise reads as metal on stone; a raw hiss reads as rain
+      const bp = this.ctx.createBiquadFilter();
+      bp.type = 'bandpass';
+      bp.frequency.value = 2400;
+      bp.Q.value = 1.1;
+      const gain = this.ctx.createGain();
+      gain.gain.value = 0;
+      src.connect(bp).connect(gain).connect(this.master);
+      src.start();
+      this.grindSrc = src;
+      this.grindGain = gain;
+      this.grindFilter = bp;
+    }
+    const t = this.ctx.currentTime;
+    this.grindGain!.gain.setTargetAtTime(0.1 * intensity, t, 0.05);
+    this.grindFilter!.frequency.setTargetAtTime(1700 + intensity * 1900, t, 0.08);
+  }
+
+  /** the saw landing: a metal shriek over a body hit */
+  sawSlam(vol = 1) {
+    if (!this.ctx || !this.master) return;
+    const t = this.ctx.currentTime;
+    const o = this.ctx.createOscillator();
+    o.type = 'sawtooth';
+    o.frequency.setValueAtTime(900, t);
+    o.frequency.exponentialRampToValueAtTime(140, t + 0.28);
+    const g = this.ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(0.3 * vol, t + 0.01);
+    g.gain.exponentialRampToValueAtTime(0.001, t + 0.34);
+    o.connect(g).connect(this.master);
+    o.start(t);
+    o.stop(t + 0.36);
+    this.thud(vol * 0.9);
   }
 
   /** heavy low thud — wall crashes and hard landings */

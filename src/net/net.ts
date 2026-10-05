@@ -80,6 +80,7 @@ export function serializeSnapshot(g: Game): any {
       r1(v.specialActiveTime), v.killStreak, r1(v.specialWindow),
       v.lastInputTs,   // echo: lets that guest measure its own round-trip time
       v.nukes,         // a[25] — drives the guest's own HUD chip and deck warhead
+      Math.round(v.sawGrind * 100),   // a[26] — REAPER's blade angle on guests
     ];
   });
   const mis = g.missiles.filter((m) => !m.dead).map((m) => [r1(m.pos.x), r1(m.pos.y), r1(m.pos.z), r1(m.vel.x), r1(m.vel.y), r1(m.vel.z)]);
@@ -297,6 +298,10 @@ export class GuestSync {
         sfx.explosion(Math.max(0.15, Math.min(1, 1.4 - at.distanceTo(me.position) / 70)));
       } else if (e.k === 'slam') {
         g.effects.shockwave(new THREE.Vector3(e.x, e.y, e.z));
+      } else if (e.k === 'saw') {
+        const at = new THREE.Vector3(e.x, e.y, e.z);
+        g.effects.sawSlam(at, new THREE.Vector3(0, 0, -1));
+        sfx.sawSlam(Math.max(0.2, Math.min(1.2, 1.4 - at.distanceTo(me.position) / 60)));
       } else if (e.k === 'kill') {
         g.hud.addKillFeed(e.a, e.v);
       } else if (e.k === 'ann') {
@@ -368,6 +373,7 @@ export class GuestSync {
       v.killStreak = a[22] ?? 0;
       v.specialWindow = a[23] ?? 0;
       v.nukes = a[25] ?? 0;
+      v.sawGrind = (a[26] ?? 0) / 100;
       v.eliminated = !!(flags & 16);
       v.overdriveTime = flags & 32 ? 1 : 0;
       v.drifting = !!(flags & 64);

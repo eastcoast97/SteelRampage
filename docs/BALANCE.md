@@ -25,6 +25,7 @@ weapon identically and asymptotes — armor can never reach immunity.
 
 | Vehicle | Armor | Mitigation | Effective HP |
 |---|---|---|---|
+| REAPER | -15 | -18% (takes MORE) | 85 |
 | VIPER | 0 | 0% | 100 |
 | SCORCH | 25 | 20% | 125 |
 | JACKRABBIT | 30 | 23% | 130 |
@@ -35,6 +36,16 @@ weapon identically and asymptotes — armor can never reach immunity.
 | JUGGERNAUT | 200 | 67% | 300 |
 
 ## Damage hierarchy (raw, pre-mitigation)
+
+**APEX — REAPER's saw slam: 36, ARMOR-PIERCING, 9.5m forward arc.** The only
+special above the cap, and the only one that cannot be earned by kills or picked
+up: it is charged ONLY by holding a wheelie with the blade on the tarmac
+(`SAW_CHARGE_TIME` 5s continuous above 7 m/s), which is several seconds of
+riding slow, straight and lit up in the open. Partial charge bleeds at 0.05/s; a
+full bar holds. REAPER pays for it with **armor -15** — the only negative in the
+roster, 85 effective HP, thinner than VIPER. Piercing for the same reason as the
+nuke: unmitigated it is a third of anyone's bar, and being the one thing a
+JUGGERNAUT fears is the entire point of the vehicle.
 
 **APEX — Nuke: 48, ARMOR-PIERCING, radius 22.** Deliberately outside the hierarchy
 below and the only thing that outranks a missile. Pickup only, capacity 1, no overdrive
@@ -74,7 +85,10 @@ Overdrive pickup: MG ×1.75 = 3.85, missile ×1.5 = 51 — tiers preserved.
 - Locked missile direct hit: 34.0 raw ✓ top of hierarchy
 - Turret full 5s activation on one victim: 29.0 raw ✓ ledger cap
 - Full-speed nitro-ram: 29.0 raw ✓ clamp
+- Saw slam vs armor -15 and vs armor +115: **36.0 both** ✓ armor irrelevant
+- Saw charge: 0.20/s grinding (= 1/5s exact), 0.05/s decay when not
 - 12 MG hits: 26.4 raw (= 12 × 2.2 exact)
+- Seismic slam radius 12.1 (was 11), visual ring driven by the same constant
 
 ### Nuke (headless, 2026-10-05)
 

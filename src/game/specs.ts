@@ -9,14 +9,18 @@ export const MAX_MISSILES = 3;
 export const MAX_MINES = 6;
 export const MAX_NUKES = 1;
 
-export type SpecialId = 'dash' | 'minigun' | 'flame' | 'turret' | 'slam' | 'bomb' | 'repair' | 'minetrail';
+export type SpecialId = 'dash' | 'minigun' | 'flame' | 'turret' | 'slam' | 'bomb' | 'repair' | 'chainsaw';
 
 export interface CarSpec {
   id: string;
   name: string;
   desc: string;
   maxHealth: number;   // universal 100 pool
-  armor: number;       // mitigation rating: damageTaken = raw * 100/(100+armor)
+  /** mitigation rating: damageTaken = raw * 100/(100+armor).
+   *  MAY BE NEGATIVE — REAPER runs -15, i.e. it takes 18% MORE than raw. It is
+   *  the only vehicle that does, and it pays for the saw. Values at or below
+   *  -100 would invert the formula, so takeDamage clamps. */
+  armor: number;
   accel: number;      // m/s^2
   topSpeed: number;   // m/s
   steerMax: number;   // rad
@@ -26,7 +30,7 @@ export interface CarSpec {
   size: { x: number; y: number; z: number };
   color: number;
   accent: number;
-  build: 'speed' | 'muscle' | 'sports' | 'suv' | 'tank' | 'hearse' | 'ambulance' | 'taxi';
+  build: 'speed' | 'muscle' | 'sports' | 'suv' | 'tank' | 'hearse' | 'ambulance' | 'bike';
   specialId: SpecialId;
   specialName: string;
   specialDesc: string;
@@ -147,20 +151,23 @@ export const CAR_SPECS: CarSpec[] = [
     specialRecharge: 16,
   },
   {
-    id: 'jackrabbit',
-    name: 'JACKRABBIT',
-    desc: 'The meter is running. So should you.',
+    id: 'reaper',
+    name: 'REAPER',
+    desc: 'No plating, no brakes, no second thoughts.',
     maxHealth: 100,
-    armor: 30,
-    accel: 28, topSpeed: 30.5, steerMax: 0.58, grip: 6.2, turboMax: 3.0,
-    size: { x: 0.74, y: 0.42, z: 1.6 },
-    color: 0xe8b820,
-    accent: 0x181410,
-    build: 'taxi',
-    specialId: 'minetrail',
-    specialName: 'MINE SALVO',
-    specialDesc: 'Dumps a trail of three live mines',
-    specialRecharge: 14,
+    // the ONLY negative armor in the roster: 85 effective HP, the thinnest
+    // skin in the game, VIPER included. That is the price of the saw.
+    armor: -15,
+    accel: 36, topSpeed: 33.5, steerMax: 0.78, grip: 7.4, turboMax: 3.2,
+    size: { x: 0.42, y: 0.40, z: 1.3 },
+    color: 0x16161c,
+    accent: 0xff3a10,
+    build: 'bike',
+    specialId: 'chainsaw',
+    specialName: 'THE SAW',
+    specialDesc: 'Wheelie and grind the saw on the road to charge, then slam it',
+    // unused: the saw is charged by grinding, never by time or kills
+    specialRecharge: 0,
   },
 ];
 
