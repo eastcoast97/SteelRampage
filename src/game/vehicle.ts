@@ -75,6 +75,7 @@ export class Vehicle {
   sawLastNose = 0;
   /** REAPER only — world position of the blade tip (set from the mesh) */
   sawTip: ((out: THREE.Vector3) => THREE.Vector3) | null = null;
+  sawRoot: ((out: THREE.Vector3) => THREE.Vector3) | null = null;
   /** REAPER only — 0..1 charge → fire on the blade */
   setSawCharge: ((t: number) => void) | null = null;
   /** REAPER only — animated pivots (see render/reaper.ts) */

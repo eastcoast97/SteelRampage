@@ -47,6 +47,8 @@ export interface ReaperResult extends CarMeshResult {
   bones: RiderBones | null;
   /** world-space tip of the bar — the grind contact point */
   sawTip(out: THREE.Vector3): THREE.Vector3;
+  /** where the bar leaves the engine — fire runs from here to the tip */
+  sawRoot(out: THREE.Vector3): THREE.Vector3;
   /** 0..1 — friction heat, drives the fire on the bar */
   setCharge(t: number): void;
   /** hands the saw to the scene so it can fly, and takes it back after */
@@ -60,6 +62,171 @@ function longest(b: THREE.Box3): ['x' | 'y' | 'z', number] {
   if (s.x >= s.y && s.x >= s.z) return ['x', s.x];
   if (s.z >= s.y) return ['z', s.z];
   return ['y', s.y];
+}
+
+interface SawFit {
+  /** model -> sawBar rotation, already carrying the normalising scale */
+  basis: THREE.Matrix4;
+  scale: number;
+  /** the hand position, in the rotated+scaled frame */
+  grip: THREE.Vector3;
+  /** bar ends, RELATIVE TO THE GRIP (i.e. already in sawBar space) */
+  tip: THREE.Vector3;
+  root: THREE.Vector3;
+}
+
+/**
+ * Work out how a generated chainsaw is actually built, so the rider can hold it
+ * by the handle.
+ *
+ * None of this is inferable from a bounding box, which is what the first version
+ * tried: it laid the longest axis down -Z and slid the mesh back by 45% of its
+ * length, which happened to point the ENGINE forward and leave the pivot in the
+ * middle of the cutting bar. The model is generated, so its axes, its facing and
+ * even its length axis can change on any regeneration — everything here is
+ * measured from the vertices instead.
+ *
+ * The three facts that make it work:
+ *  - the BAR is the thin end. A chainsaw's cross-section is tiny along the bar
+ *    and large across the engine, so binning the cross-sectional area along the
+ *    length axis tells you which end is which (measured 0.011 vs 0.38).
+ *  - UP is the sparse side. The handles are thin tubes and the engine and tank
+ *    are a solid block, so the extreme band with FEWER vertices is the top.
+ *  - the GRIP is the top handle: the thin structure in the top band, over the
+ *    engine rather than over the bar.
+ */
+function fitSaw(saw: THREE.Object3D, targetLen: number): SawFit {
+  saw.updateMatrixWorld(true);
+  const pts: THREE.Vector3[] = [];
+  const v = new THREE.Vector3();
+  saw.traverse((o) => {
+    const m = o as THREE.Mesh;
+    if (!m.isMesh || !m.geometry?.attributes?.position) return;
+    const p = m.geometry.attributes.position;
+    for (let i = 0; i < p.count; i++) {
+      pts.push(v.fromBufferAttribute(p, i).applyMatrix4(m.matrixWorld).clone());
+    }
+  });
+
+  const box = new THREE.Box3().setFromPoints(pts);
+  const size = box.getSize(new THREE.Vector3());
+  const ax: ('x' | 'y' | 'z')[] = ['x', 'y', 'z'];
+  const sz = [size.x, size.y, size.z];
+  const L = sz.indexOf(Math.max(...sz));
+  const [A0, A1] = [0, 1, 2].filter((a) => a !== L);
+  const lo = [box.min.x, box.min.y, box.min.z];
+  const hi = [box.max.x, box.max.y, box.max.z];
+  const at = (p: THREE.Vector3, a: number) => p[ax[a]];
+  const span = Math.max(1e-6, sz[L]);
+
+  // cross-section area along the length axis
+  const N = 10;
+  const bins = [...Array(N)].map(() => ({ n: 0, mn: [1e9, 1e9], mx: [-1e9, -1e9] }));
+  for (const p of pts) {
+    const k = Math.min(N - 1, Math.max(0, Math.floor(((at(p, L) - lo[L]) / span) * N)));
+    const b = bins[k];
+    b.n++;
+    for (let j = 0; j < 2; j++) {
+      const c = at(p, j === 0 ? A0 : A1);
+      if (c < b.mn[j]) b.mn[j] = c;
+      if (c > b.mx[j]) b.mx[j] = c;
+    }
+  }
+  const area = bins.map((b) => (b.n ? (b.mx[0] - b.mn[0]) * (b.mx[1] - b.mn[1]) : 0));
+  const headArea = (area[0] + area[1]) / 2, tailArea = (area[N - 1] + area[N - 2]) / 2;
+  const barAtMin = headArea < tailArea;              // the thin end is the bar
+  const barDirL = barAtMin ? -1 : 1;
+
+  // UP: of the two cross axes, the one the bar is TALL in (a bar is tall and
+  // thin), and the sign that points at the sparse, handle-bearing side.
+  const barZone = pts.filter((p) => {
+    const t = (at(p, L) - lo[L]) / span;
+    return barAtMin ? t < 0.25 : t > 0.75;
+  });
+  const ext = (list: THREE.Vector3[], a: number) => {
+    let mn = 1e9, mx = -1e9;
+    for (const p of list) { const c = at(p, a); if (c < mn) mn = c; if (c > mx) mx = c; }
+    return [mn, mx] as const;
+  };
+  const e0 = ext(barZone, A0), e1 = ext(barZone, A1);
+  const U = (e0[1] - e0[0]) >= (e1[1] - e1[0]) ? A0 : A1;
+  const W = U === A0 ? A1 : A0;
+  // engine half = everything past the bar
+  const engine = pts.filter((p) => {
+    const t = (at(p, L) - lo[L]) / span;
+    return barAtMin ? t > 0.45 : t < 0.55;
+  });
+  const uRange = Math.max(1e-6, hi[U] - lo[U]);
+  const bandN = (sign: number) =>
+    engine.filter((p) => (sign > 0 ? at(p, U) > hi[U] - 0.15 * uRange
+                                   : at(p, U) < lo[U] + 0.15 * uRange)).length;
+  const upSign = bandN(1) <= bandN(-1) ? 1 : -1;     // thin tubes up, solid block down
+
+  // GRIP: the REAR HANDLE — the trigger loop at the very back.
+  //
+  // The top handle was tried first and is wrong for this vehicle in two ways.
+  // It sits near the middle of the saw, so he only reaches 0.70m past his fist,
+  // and the grind is specified as dragging the bar on the tarmac: measured
+  // against the rig (shoulder 1.71m, arm reach 0.42m) the lowest the tip could
+  // ever get was 0.68m ABOVE the road, with the whole arm and a full body lean
+  // optimised for it. Off the rear handle the reach is 1.06m and the bar makes
+  // the road. It is also how a chainsaw is actually held one-handed — that loop
+  // carries the throttle, and the hand goes THROUGH it, which is why its
+  // centroid is the right point rather than a surface.
+  //
+  // Found the same way as the bar: walk in from the far end while the section
+  // stays thin. The handle is a tube, the engine behind it is a block.
+  const maxArea = Math.max(...area);
+  let handL = barAtMin ? hi[L] : lo[L];
+  for (let i = 0; i < N; i++) {
+    const k = barAtMin ? N - 1 - i : i;
+    if (area[k] > maxArea * 0.35) { handL = lo[L] + ((k + (barAtMin ? 1 : 0)) / N) * span; break; }
+  }
+  const rearBand = engine.filter((p) => barAtMin ? at(p, L) > handL : at(p, L) < handL);
+  // fall back to the top handle if this saw has no rear loop to speak of
+  const topBand = engine.filter((p) => upSign > 0 ? at(p, U) > hi[U] - 0.28 * uRange
+                                                  : at(p, U) < lo[U] + 0.28 * uRange);
+  const pool = rearBand.length > 40 ? rearBand : (topBand.length ? topBand : engine);
+  const grip = new THREE.Vector3();
+  for (const p of pool) grip.add(p);
+  grip.multiplyScalar(1 / Math.max(1, pool.length));
+
+  // BAR line: the extreme along the bar direction, on the bar's own cross-centre
+  const barU = (ext(barZone, U)[0] + ext(barZone, U)[1]) / 2;
+  const barW = (ext(barZone, W)[0] + ext(barZone, W)[1]) / 2;
+  const tipL = barAtMin ? lo[L] : hi[L];
+  // the root is where the section stops being a bar
+  let rootL = tipL;
+  const barArea = Math.max(1e-9, barAtMin ? headArea : tailArea);
+  for (let i = 0; i < N; i++) {
+    const k = barAtMin ? i : N - 1 - i;
+    if (area[k] > barArea * 2.5) { rootL = lo[L] + ((k + (barAtMin ? 0 : 1)) / N) * span; break; }
+  }
+  const mk = (l: number) => {
+    const p = new THREE.Vector3();
+    p[ax[L]] = l; p[ax[U]] = barU; p[ax[W]] = barW;
+    return p;
+  };
+  const tip = mk(tipL), root = mk(rootL);
+
+  // model -> sawBar: the bar runs down -Z and the saw's own up becomes +Y
+  const f = new THREE.Vector3(); f[ax[L]] = barDirL;
+  const u = new THREE.Vector3(); u[ax[U]] = upSign;
+  const zT = f.clone().negate();
+  const yT = u.clone().sub(zT.clone().multiplyScalar(u.dot(zT))).normalize();
+  const xT = new THREE.Vector3().crossVectors(yT, zT);
+  const scale = targetLen / span;
+  const rot = new THREE.Matrix4().set(
+    xT.x, xT.y, xT.z, 0,
+    yT.x, yT.y, yT.z, 0,
+    zT.x, zT.y, zT.z, 0,
+    0, 0, 0, 1,
+  );
+  // every measured point goes through the SAME transform the mesh will get
+  const into = (p: THREE.Vector3) => p.clone().applyMatrix4(rot).multiplyScalar(scale);
+  const gripT = into(grip), tipT = into(tip), rootT = into(root);
+  const basis = rot.clone().scale(new THREE.Vector3(scale, scale, scale));
+  return { basis, scale, grip: gripT, tip: tipT.sub(gripT), root: rootT.sub(gripT) };
 }
 
 export function buildReaper(spec: CarSpec, _colorOverride?: number): ReaperResult {
@@ -174,29 +341,38 @@ export function buildReaper(spec: CarSpec, _colorOverride?: number): ReaperResul
   // ------------------------------------------------------------- the saw
   const sawBar = new THREE.Group();
   sawArm.add(sawBar);
-  const BLADE = 1.1;
+  // Total length, nose of the bar to the back of the rear handle. Held by the
+  // TOP HANDLE the usable reach is only about 0.63 of this (the hand sits over
+  // the engine, not on the end), which is what the grind pose has to work with.
+  const SAW_LEN = 1.35;
   let sawMesh: THREE.Object3D | null = null;
   const sawRestPos = new THREE.Vector3();
   const sawRestRot = new THREE.Euler();
   const sawRestScale = new THREE.Vector3(1, 1, 1);
+  // bar geometry in sawBar space, filled in by the fit below; the fallbacks are
+  // only ever used if the model is missing
+  const barTip = new THREE.Vector3(0, 0, -SAW_LEN * 0.5);
+  const barRoot = new THREE.Vector3(0, 0, -SAW_LEN * 0.15);
   const sawSrc = getSawModel();
   if (sawSrc) {
     const saw = sawSrc.clone(true);
-    const sb = new THREE.Box3().setFromObject(saw);
-    const [axis, len] = longest(sb);
-    // normalise to a fixed length on whichever axis came back longest, then lay
-    // that axis down -Z so "the bar points forward" holds either way
-    saw.scale.setScalar(BLADE / Math.max(1e-3, len));
-    if (axis === 'x') saw.rotation.y = Math.PI / 2;
-    else if (axis === 'y') saw.rotation.x = Math.PI / 2;
-    const sc = new THREE.Box3().setFromObject(saw).getCenter(new THREE.Vector3());
-    saw.position.set(-sc.x, -sc.y, -sc.z - BLADE * 0.45);   // grip at the pivot
+    const fit = fitSaw(saw, SAW_LEN);
+    // The hand goes on the TOP HANDLE and the bar points away down -Z. Both used
+    // to be guessed: the old code laid the longest axis down -Z and slid the mesh
+    // back by a fraction of its length, which on this model put the ENGINE
+    // forward and the pivot in the middle of the blade — he gripped the cutting
+    // edge. Neither end of a chainsaw is identifiable from a bounding box, so
+    // both are measured (see fitSaw).
+    saw.applyMatrix4(fit.basis);     // carries the normalising scale
+    saw.position.sub(fit.grip);      // the hand ends up at the pivot
     saw.traverse((o) => { if ((o as THREE.Mesh).isMesh) o.castShadow = true; });
     sawBar.add(saw);
     sawMesh = saw;
     sawRestPos.copy(saw.position);
     sawRestRot.copy(saw.rotation);
     sawRestScale.copy(saw.scale);
+    barTip.copy(fit.tip);
+    barRoot.copy(fit.root);
   }
 
   // Fire on the bar: a thin emissive core whose LENGTH tracks the charge, so the
@@ -206,12 +382,21 @@ export function buildReaper(spec: CarSpec, _colorOverride?: number): ReaperResul
     color: 0xff6a10, emissive: 0xff3c00, emissiveIntensity: 0.45,
     roughness: 0.5, transparent: true, opacity: 0.85,
   });
-  const flameSheath = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.18, BLADE), fire);
+  // The sheath lies ALONG THE REAL BAR, not along the pivot's -Z. The bar hangs
+  // below and outboard of the hand, so an axis-aligned box at the origin floated
+  // in the air beside the saw.
+  const barLen = Math.max(0.05, barTip.distanceTo(barRoot));
+  const barAxis = barTip.clone().sub(barRoot).normalize();
+  const flameSheath = new THREE.Mesh(new THREE.BoxGeometry(0.075, 0.17, barLen), fire);
+  flameSheath.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), barAxis);
   flameSheath.visible = false;
   sawBar.add(flameSheath);
   const tip = new THREE.Object3D();
-  tip.position.set(0, 0, -BLADE);
+  tip.position.copy(barTip);
   sawBar.add(tip);
+  const root = new THREE.Object3D();
+  root.position.copy(barRoot);
+  sawBar.add(root);
 
   // ------------------------------------------------------------- wheels
   // The rig drives FOUR pivots and does `children[0].rotation.set(spin,0,0)`
@@ -263,12 +448,17 @@ export function buildReaper(spec: CarSpec, _colorOverride?: number): ReaperResul
     wheelieNode, frontSteer, frontSpin, rearSpin,
     sawArm, sawBar, sawHand, idleArm, rider, bones,
     sawTip: (out) => { tip.getWorldPosition(_t); return out.copy(_t); },
+    sawRoot: (out) => { root.getWorldPosition(_t); return out.copy(_t); },
     setCharge: (t) => {
       const lit = t > 0.02;
       flameSheath.visible = lit;
       if (lit) {
-        flameSheath.scale.set(1, 1, 0.12 + t * 0.9);
-        flameSheath.position.z = -(BLADE * (0.12 + t * 0.9)) / 2;
+        // grows from the bar's ROOT toward its TIP along the bar's own line —
+        // the bar hangs below and outboard of the hand, so anything measured
+        // from the pivot's -Z burns in mid-air beside the saw
+        const f = 0.12 + t * 0.9;
+        flameSheath.scale.set(1, 1, f);
+        flameSheath.position.copy(barRoot).addScaledVector(barAxis, (barLen * f) / 2);
         fire.emissiveIntensity = 0.5 + t * 1.9;
       }
     },

@@ -97,10 +97,29 @@ const SAW_SWING_TIME = 0.5;
 // The saw hangs off the left hand bone, so posing the arm moves the saw for
 // free — there is no second pose system to keep in step.
 const SAW_REST = [-0.15, 0.0, 0.45, -0.55] as const;    // hanging at his side
-const SAW_GRIND = [0.55, 0.15, 0.95, -0.2] as const;    // reaching down to the tarmac
+// Re-solved after the saw moved into his REAR HANDLE. Gripping the top handle
+// left only 0.70m past his fist and the bar could not be got closer than 0.68m
+// to the road by ANY arm pose (optimised, with a full body lean) — the old pose
+// only "ground the tarmac" because the contact point was a virtual marker 1.1m
+// from the pivot, further away than the saw actually extended. Off the rear
+// handle the reach is 1.30m; this pose puts the real bar tip at y 0.14 with the
+// bar angled nose-down (root 0.67) and 0.55m out to his left, which is as far
+// out as the arm reaches while still touching -- any further and it is dragging
+// inside the rear wheel where you cannot see it.
+// SOLVE IT WHILE HE IS RIDING, not on a parked bike. A pose solved against a
+// vehicle held in place with setTranslation is wrong by ~0.4m: the forced
+// position fights the suspension, which pushes the body back up on the next
+// step, so the rider sits higher than he ever does in play. Drive up to speed
+// with the grind held, then optimise.
+const SAW_GRIND = [0.45, -0.87, 0.21, 1.27] as const;   // reaching down to the tarmac
 const SAW_RAISE = [-2.0, 0.1, 0.5, -1.5] as const;      // cocked back over the shoulder
 const SAW_STRIKE = [-0.5, -0.3, 0.2, -0.1] as const;    // hurled out front, arm extended
-const SAW_WHEELIE_ANGLE = 0.46;    // ~26 degrees of nose-up while grinding
+// ~23 degrees of nose-up while grinding. Was 26, and the 3 degrees matter: the
+// rider sits about 0.8m forward of the rear axle the wheelie pivots on, so every
+// degree of nose-up lifts him away from the road he is supposed to be cutting.
+// At 26 the bar could not be got closer than 0.34m to the tarmac by ANY arm pose
+// (36 random restarts), however long the saw.
+const SAW_WHEELIE_ANGLE = 0.40;
 // Arm poses, as [x, y, z] euler on the LEFT shoulder pivot.
 // NOTE the grind pose is applied with the wheelie angle SUBTRACTED from x — the
 // arm hangs inside the node that pitches the bike up, so without that the blade
@@ -366,6 +385,7 @@ export class Game {
     if ('sawArm' in built) {
       const r = built as ReaperResult;
       v.sawTip = r.sawTip;
+      v.sawRoot = r.sawRoot;
       v.setSawCharge = r.setCharge;
       v.wheelieNode = r.wheelieNode;
       v.frontSteer = r.frontSteer;
@@ -2086,12 +2106,17 @@ export class Game {
           // the blade rises with the nose and grinds thin air
           if (bn?.armL) bn.armL.rotation.x -= g * SAW_WHEELIE_ANGLE;   // stay level with the road
         }
-        // the chain only runs when it is working
-        if (g > 0.02 || v.sawSwing > 0) v.sawBar.rotation.z += dt * (26 + g * 40);
+        // NO spin on sawBar. It used to barrel-roll the whole saw to suggest the
+        // chain running, which only looked sane while the pivot sat on the bar's
+        // own axis; now that he holds the TOP HANDLE the saw hangs off-axis and
+        // rolling it swings the thing round his fist. The chain reads from the
+        // sparks, the fire and the sound instead.
         v.setSawCharge?.(v.specialEnergy);
-        // fire licking along the heated part of the bar
+        // fire licking along the heated part of the bar, from the bar's ROOT —
+        // sawBar's own origin is the HAND, so starting there drew the flames
+        // across his fist and up his arm
         if (v.specialEnergy > 0.02 && v.sawTip) {
-          v.sawBar.getWorldPosition(_v2);
+          if (v.sawRoot) v.sawRoot(_v2); else v.sawBar.getWorldPosition(_v2);
           // Hard down-weight while it is only slung on his back: a fully charged
           // blade burning at grinding intensity over his shoulder made the whole
           // bike read as being on fire. Grinding it is the thing that stokes it.

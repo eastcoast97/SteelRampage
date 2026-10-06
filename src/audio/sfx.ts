@@ -501,6 +501,13 @@ class Sfx {
    * hurled through the air is MECHANICAL, and mechanical is what this synth is
    * good at: a hard whoosh of band-passed noise sweeping upward as it leaves,
    * and the chain whining down in pitch as it spins away.
+   *
+   * The voice on top is a recorded sample, and it is not a recording of a laugh
+   * — a TTS take is a man laughing, and picking a deeper voice only gets a
+   * deeper man. It is pitched down, layered against itself an octave below and
+   * at a detune, ring-modulated and put in a cellar by
+   * tools/audio/demonise.py, which takes the fundamental from 106 Hz to 75 Hz
+   * and gives it more than one throat.
    */
   /** fetched once, on the first user gesture that creates the context */
   private loadLaugh() {
@@ -516,15 +523,16 @@ class Sfx {
     if (!this.ctx || !this.master) return;
     const t = this.ctx.currentTime;
 
-    // the laugh, over the top of the mechanical cue
+    // the laugh, over the top of the mechanical cue. It arrives already
+    // pitched, layered and drenched (tools/audio/demonise.py) — playing it back
+    // slower here as well only smears it, so it runs at its own rate.
     if (this.laughBuf) {
       const lv = this.ctx.createBufferSource();
       lv.buffer = this.laughBuf;
-      lv.playbackRate.value = 0.92;      // dropped a touch: nastier, less chirpy
       const lg = this.ctx.createGain();
-      lg.gain.value = 0.85 * vol;
+      lg.gain.value = 0.95 * vol;
       lv.connect(lg).connect(this.master);
-      lv.start(t + 0.1);                 // a beat behind the throw itself
+      lv.start(t + 0.06);                // a beat behind the throw itself
     } else {
       this.loadLaugh();
     }
