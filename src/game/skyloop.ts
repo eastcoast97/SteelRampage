@@ -640,23 +640,52 @@ function buildOnRamp(o: SkyLoopOpts, s: Sample[], at: number) {
     uv.push(0, v, 1, v, 0, v, 1, v);
   }
   const STRIDE = 4;
+  // Skirt ONLY the low earth section. Carrying the embankment all the way up
+  // turned the ramp into an 88m solid wall, which boxed in dead-end alleys
+  // between it and the nearby buildings — you could drive in and have nowhere
+  // to go. Above EARTH_TOP the lane rides on piers like the main deck does,
+  // so the space underneath stays open.
+  //
+  // The skirt starts the instant the road clears the ground, not at 0.5m. It
+  // used to wait, on the grounds that walling the emergence turns the entrance
+  // into a kerb — but the skirts are on the lane's SIDES and the entrance is its
+  // END, so they never blocked it. What the gap did do was leave the first few
+  // metres of lane as a lip floating up to half a metre over the street with
+  // open sides, and a car could put its nose under that lip and jam: six of
+  // eight approach directions on two ramps ended stuck there, unable to reverse
+  // out. It was also the way INTO the shell, which is how cars ended up pinned
+  // further up it. The only thing that must stay unskirted is where the road is
+  // still BELOW ground (the foot is buried at -0.3 so the lane emerges from the
+  // tarmac); skirting there would invert the quad into a wall standing ON the
+  // entrance.
+  const skirted: boolean[] = [];
+  for (let k = 0; k < RUN; k++) {
+    const ya = pos[k * STRIDE * 3 + 1], yc = pos[(k + 1) * STRIDE * 3 + 1];
+    skirted.push(ya > 0.02 && yc > 0.02 && ya < EARTH_TOP && yc < EARTH_TOP);
+  }
+  /**
+   * Close off a cross-section: road edges down to the ground points.
+   *
+   * THE EMBANKMENT IS A SHELL, NOT A SOLID. A trimesh is a surface, so a road
+   * with two side skirts and nothing at the ends is a TUNNEL whose ceiling is
+   * the underside of the lane. Its roof falls from EARTH_TOP to 0.5m along its
+   * run, so a car that drove in at the tall end wedged solid as the clearance
+   * ran out — measured 2.06m narrowing to 1.26m, which is exactly car height,
+   * on all three ramps. Capping both ends makes it a sealed volume with no way
+   * in. (Not a dead end in the 3.7g sense: the piered section beyond is open
+   * sideways between its legs, so meeting this wall you simply turn out.)
+   */
+  const cap = (s: number) => { idx.push(s, s + 1, s + 3, s, s + 3, s + 2); };
   for (let k = 0; k < RUN; k++) {
     const a = k * STRIDE, b = a + 1, la = a + 2, ra = a + 3;
     const c = a + STRIDE, d = c + 1, lc = c + 2, rc = c + 3;
     idx.push(a, c, b, b, c, d);              // road surface
     idxRoad.push(a, c, b, b, c, d);
-    // Skirt ONLY the low earth section. Carrying the embankment all the way up
-    // turned the ramp into an 88m solid wall, which boxed in dead-end alleys
-    // between it and the nearby buildings — you could drive in and have nowhere
-    // to go. Above EARTH_TOP the lane rides on piers like the main deck does,
-    // so the space underneath stays open. The very bottom is left unskirted too:
-    // walling where the lane emerges from the tarmac turns the entrance itself
-    // into a kerb and the car cannot get on at all.
-    const lowEnough = pos[a * 3 + 1] < EARTH_TOP && pos[c * 3 + 1] < EARTH_TOP;
-    if (pos[a * 3 + 1] > 0.5 && pos[c * 3 + 1] > 0.5 && lowEnough) {
-      idx.push(la, a, lc, lc, a, c);         // left skirt
-      idx.push(b, ra, d, d, ra, rc);         // right skirt
-    }
+    if (!skirted[k]) continue;
+    idx.push(la, a, lc, lc, a, c);           // left skirt
+    idx.push(b, ra, d, d, ra, rc);           // right skirt
+    if (k === 0 || !skirted[k - 1]) cap(a);          // low end
+    if (k === RUN - 1 || !skirted[k + 1]) cap(c);    // high end, where the piers start
   }
 
   // record the centre of the first and last cross-sections
