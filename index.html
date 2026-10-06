@@ -57,18 +57,20 @@
     <div id="loading-track"><div id="loading-fill"></div></div>
     <div class="load-controls">
       <div class="lc-head">CONTROLS</div>
-      <div class="lc-grid">
-        <div class="lc-row"><span class="keys"><kbd>W</kbd><kbd>S</kbd></span><span>drive / reverse</span></div>
-        <div class="lc-row"><span class="keys"><kbd>A</kbd><kbd>D</kbd></span><span>steer</span></div>
-        <div class="lc-row"><span class="keys"><kbd>SHIFT</kbd></span><span>turbo boost</span></div>
-        <div class="lc-row"><span class="keys"><kbd>SPACE</kbd></span><span>handbrake / drift</span></div>
-        <div class="lc-row"><span class="keys"><kbd>CLICK</kbd><kbd>F</kbd></span><span>machine gun</span></div>
-        <div class="lc-row"><span class="keys"><kbd>RCLICK</kbd><kbd>E</kbd></span><span>special weapon</span></div>
-        <div class="lc-row"><span class="keys"><kbd>G</kbd></span><span>homing missile</span></div>
-        <div class="lc-row"><span class="keys"><kbd>Q</kbd></span><span>drop mine</span></div>
-        <div class="lc-row"><span class="keys"><kbd>C</kbd></span><span>nuke (rare pickup)</span></div>
-        <div class="lc-row"><span class="keys"><kbd>R</kbd></span><span>flip car upright</span></div>
-        <div class="lc-row"><span class="keys"><kbd>ESC</kbd><kbd>M</kbd></span><span>pause / mute</span></div>
+      <div class="lc-grid" id="loading-controls-grid"></div>
+    </div>
+    <div id="loading-brief">
+      <div class="lb-map">
+        <div class="lb-head" id="loading-map-name">ARENA</div>
+        <canvas id="loading-map"></canvas>
+        <div id="loading-map-blurb"></div>
+      </div>
+      <div class="lb-car">
+        <div class="lb-head">VEHICLE INTEL</div>
+        <div id="loading-car-name"></div>
+        <div id="loading-car-desc"></div>
+        <div id="loading-car-special"></div>
+        <div id="loading-car-how"></div>
       </div>
     </div>
     <div id="loading-tip"></div>
@@ -81,6 +83,20 @@
     <div id="mode-select"></div>
     <div id="arena-select"></div>
     <div id="car-select"></div>
+    <div id="car-brief">
+      <canvas id="car-preview"></canvas>
+      <div id="car-brief-info">
+        <h3 id="cb-name"></h3>
+        <div id="cb-desc"></div>
+        <div id="cb-stats"></div>
+        <div id="cb-special">
+          <div class="cb-sp-name"></div>
+          <div class="cb-sp-how"></div>
+          <div class="cb-sp-effect"></div>
+          <div class="cb-sp-stats"></div>
+        </div>
+      </div>
+    </div>
     <div id="online-panel">
       <input id="player-name" maxlength="12" placeholder="YOUR NAME" />
       <button id="host-btn">HOST PRIVATE GAME</button>
@@ -108,7 +124,16 @@
   <div id="pause" class="hidden">
     <h1>PAUSED</h1>
     <button id="resume-btn">RESUME</button>
+    <button id="controls-btn" class="secondary">CONTROLS</button>
     <button id="quit-btn" class="secondary">QUIT TO MENU</button>
+  </div>
+
+  <!-- CONTROLS reference, opened from the pause menu -->
+  <div id="controls-panel" class="hidden">
+    <h1>CONTROLS</h1>
+    <div class="lc-grid" id="controls-grid"></div>
+    <div id="controls-special"></div>
+    <button id="controls-close">BACK</button>
   </div>
 
   <!-- GAME OVER -->

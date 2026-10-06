@@ -499,3 +499,131 @@ html, body {
 }
 #final-board .row { display: flex; justify-content: space-between; gap: 40px; }
 #final-board .row.me { color: var(--accent2); }
+
+/* ---------- LOADING BRIEFING: the map and one vehicle ---------- */
+#loading-brief {
+  display: flex; gap: 18px; margin-top: 12px; align-items: stretch;
+  max-width: min(760px, 94vw); flex-wrap: wrap; justify-content: center;
+}
+#loading-brief .lb-map, #loading-brief .lb-car {
+  border: 1px solid rgba(255,255,255,0.12);
+  background: rgba(255,255,255,0.03);
+  padding: 14px 16px;
+}
+#loading-brief .lb-map { flex: 0 0 auto; text-align: center; }
+#loading-map { width: 190px; height: 190px; display: block; margin: 0 auto; }
+#loading-map-blurb {
+  font-family: Arial, sans-serif; font-size: 10.5px; color: #8d8a9e;
+  max-width: 200px; margin-top: 8px; line-height: 1.45;
+}
+#loading-brief .lb-car { flex: 1 1 280px; max-width: 360px; text-align: left; }
+#loading-car-name { font-size: 20px; letter-spacing: 2px; color: var(--accent2); margin-bottom: 2px; }
+#loading-car-desc {
+  font-family: Arial, sans-serif; font-size: 11px; color: #9b97ac; margin-bottom: 10px;
+}
+#loading-car-special {
+  font-family: Arial, sans-serif; font-size: 11.5px; color: #d6d2e2;
+  line-height: 1.5; margin-bottom: 10px;
+}
+#loading-car-special b { color: #ffcf6a; letter-spacing: 1px; }
+#loading-car-how { display: flex; flex-direction: column; gap: 4px; }
+#loading-car-how span {
+  font-family: Arial, sans-serif; font-size: 10.5px; color: #c9c6d4;
+  display: flex; gap: 8px;
+}
+#loading-car-how i {
+  font-style: normal; letter-spacing: 1.5px; color: #7d7a8d;
+  flex: 0 0 62px; font-size: 9.5px; padding-top: 1px;
+}
+@media (max-height: 780px) {
+  #loading-brief { margin-top: 6px; }
+  #loading-map { width: 150px; height: 150px; }
+}
+
+/* ---------- VEHICLE BRIEFING on the menu ---------- */
+#car-brief {
+  display: flex; gap: 20px; align-items: stretch;
+  width: min(900px, 94vw); margin: 0 auto 18px;
+  border: 1px solid rgba(255,255,255,0.12);
+  background: rgba(255,255,255,0.035);
+  padding: 16px 20px; text-align: left;
+}
+#car-preview {
+  flex: 0 0 300px; width: 300px; height: 190px; display: block;
+  background: radial-gradient(ellipse at 50% 60%, rgba(120,140,180,0.16), transparent 70%);
+}
+#car-brief-info { flex: 1 1 auto; min-width: 0; }
+#cb-name { font-size: 24px; letter-spacing: 2px; margin-bottom: 2px; }
+#cb-desc { font-family: Arial, sans-serif; font-size: 11.5px; color: #9b97ac; margin-bottom: 10px; }
+.cb-stat { display: flex; align-items: center; gap: 10px; margin-bottom: 5px; }
+.cb-lab {
+  flex: 0 0 76px; font-size: 9.5px; letter-spacing: 1.5px; color: #7d7a8d;
+}
+.cb-bar { flex: 1 1 auto; height: 6px; background: rgba(255,255,255,0.09); overflow: hidden; }
+.cb-bar i { display: block; height: 100%; background: linear-gradient(90deg, var(--accent), var(--accent2)); }
+.cb-val {
+  flex: 0 0 110px; text-align: right;
+  font-family: Arial, sans-serif; font-size: 10.5px; color: #c9c6d4;
+}
+#cb-special {
+  margin-top: 12px; padding-top: 11px;
+  border-top: 1px solid rgba(255,255,255,0.1);
+}
+.cb-sp-name { font-size: 14px; letter-spacing: 2px; color: #ffcf6a; }
+.cb-sp-how {
+  font-family: Arial, sans-serif; font-size: 10.5px; color: var(--accent2);
+  letter-spacing: 0.5px; margin: 3px 0 6px;
+}
+.cb-sp-effect {
+  font-family: Arial, sans-serif; font-size: 11.5px; color: #d6d2e2; line-height: 1.5;
+}
+.cb-sp-stats { display: flex; gap: 18px; margin-top: 9px; flex-wrap: wrap; }
+.cb-sp-stats span {
+  font-family: Arial, sans-serif; font-size: 11px; color: #e6e2f0;
+  display: flex; flex-direction: column; gap: 2px;
+}
+.cb-sp-stats i {
+  font-style: normal; font-size: 9px; letter-spacing: 1.5px; color: #7d7a8d;
+}
+@media (max-width: 880px) {
+  #car-brief { flex-direction: column; }
+  #car-preview { flex: 0 0 auto; width: 100%; height: 170px; }
+}
+
+/* ---------- CONTROLS sheet, from the pause menu ---------- */
+#controls-panel {
+  position: fixed; inset: 0; z-index: 11;
+  display: flex; flex-direction: column; align-items: center; justify-content: safe center;
+  gap: 16px; padding: 24px 0; overflow-y: auto;
+  background: rgba(8, 6, 12, 0.93);
+  color: #fff;
+}
+#controls-panel.hidden { display: none; }
+#controls-panel h1 { font-size: 40px; letter-spacing: 8px; font-style: italic; }
+#controls-grid {
+  max-width: min(620px, 92vw);
+  border: 1px solid rgba(255,255,255,0.12);
+  background: rgba(255,255,255,0.03);
+  padding: 18px 24px;
+}
+#controls-special {
+  max-width: min(620px, 92vw); text-align: left;
+  border: 1px solid rgba(255,255,255,0.12);
+  background: rgba(255,255,255,0.03);
+  padding: 14px 22px;
+}
+.cs-head { font-size: 14px; letter-spacing: 2px; color: #ffcf6a; }
+.cs-how {
+  font-family: Arial, sans-serif; font-size: 10.5px;
+  color: var(--accent2); margin: 3px 0 6px;
+}
+.cs-effect { font-family: Arial, sans-serif; font-size: 11.5px; color: #d6d2e2; line-height: 1.5; }
+.cs-stats { display: flex; gap: 20px; margin-top: 9px; flex-wrap: wrap; }
+.cs-stats span { font-family: Arial, sans-serif; font-size: 11px; color: #e6e2f0; display: flex; flex-direction: column; }
+.cs-stats i { font-style: normal; font-size: 9px; letter-spacing: 1.5px; color: #7d7a8d; }
+#controls-close {
+  font-family: inherit; font-size: 16px; letter-spacing: 2px; color: #fff;
+  background: rgba(255,255,255,0.12); border: none; padding: 10px 38px;
+  transform: skewX(-8deg); cursor: pointer; box-shadow: 0 4px 0 rgba(0,0,0,0.4);
+}
+#controls-close:hover { transform: skewX(-8deg) translateY(-2px); }

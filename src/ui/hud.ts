@@ -1,7 +1,8 @@
 import type { Vehicle } from '../game/vehicle';
 import type { Game } from '../game/game';
 import { MODES } from '../game/game';
-import { STREETS, ARCS, ROUNDABOUT, STREETS_DOCKS, ARENA_HALF } from '../game/arena';
+import { ARENA_HALF } from '../game/arena';
+import { drawArenaMap } from './arenaMap';
 import { MAX_MISSILES, MAX_MINES, MAX_NUKES } from '../game/specs';
 
 const $ = (id: string) => document.getElementById(id)!;
@@ -207,88 +208,14 @@ export class Hud {
   /**
    * Static street-layout underlay, drawn once per arena.
    *
-   * Sized from RADAR_RANGE rather than a hardcoded 160 so the scale can never
-   * drift from drawRadar's — that drift used to be a standing hazard with a
-   * comment warning about it, which is not the same as preventing it.
+   * The drawing itself lives in ui/arenaMap so the loading screen can show the
+   * same map; sized from RADAR_RANGE rather than a hardcoded 160 so the scale
+   * can never drift from drawRadar's — that drift used to be a standing hazard
+   * with a comment warning about it, which is not the same as preventing it.
    */
   private buildRadarMap(arenaIdx = 0): HTMLCanvasElement {
     const s = (this.radar.width / 2) / RADAR_RANGE;      // world metres → map px
-    const SPAN = ARENA_HALF * 2;
-    const S = Math.ceil(SPAN * s);
-    const c = document.createElement('canvas');
-    c.width = c.height = S;
-    const g = c.getContext('2d')!;
-    const px = (w: number) => w * s + S / 2;
-
-    // ground wash, so streets read as cut INTO something rather than floating
-    g.fillStyle = 'rgba(26, 32, 40, 0.55)';
-    g.fillRect(0, 0, S, S);
-
-    const streets = arenaIdx === 1 ? STREETS_DOCKS : STREETS;
-    // two passes: a dark casing under a lighter fill is what makes a road legible
-    // at this size — a single flat stroke mushes together at junctions
-    for (const pass of [
-      { col: 'rgba(10, 14, 20, 0.85)', pad: 2.5 },
-      { col: 'rgba(150, 170, 190, 0.5)', pad: 0 },
-    ]) {
-      g.strokeStyle = pass.col;
-      g.lineCap = 'round';
-      for (const [x0, z0, x1, z1, w] of streets) {
-        g.lineWidth = w * s + pass.pad;
-        g.beginPath();
-        g.moveTo(px(x0), px(z0));
-        g.lineTo(px(x1), px(z1));
-        g.stroke();
-      }
-      if (arenaIdx !== 1) {
-        for (const [cx, cz, r, th0, thLen, w] of ARCS) {
-          g.lineWidth = w * s + pass.pad;
-          g.beginPath();
-          g.arc(px(cx), px(cz), r * s, th0, th0 + thLen);
-          g.stroke();
-        }
-        g.lineWidth = ROUNDABOUT.w * s + pass.pad;
-        g.beginPath();
-        g.arc(px(0), px(0), ROUNDABOUT.r * s, 0, Math.PI * 2);
-        g.stroke();
-      }
-    }
-
-    if (arenaIdx === 1) {
-      g.fillStyle = 'rgba(32, 86, 150, 0.5)';
-      g.fillRect(px(140), px(-ARENA_HALF), 20 * s, ARENA_HALF * 2 * s);
-      g.strokeStyle = 'rgba(90, 210, 255, 0.55)';
-      g.lineWidth = 2;
-      g.strokeRect(px(32), px(-75), 24 * s, 60 * s);
-      g.strokeRect(px(32), px(15), 24 * s, 60 * s);
-      return c;
-    }
-
-    // roundabout island
-    g.fillStyle = 'rgba(214, 180, 120, 0.4)';
-    g.beginPath();
-    g.arc(px(0), px(0), ROUNDABOUT.islandR * s, 0, Math.PI * 2);
-    g.fill();
-    // diagonal tunnels — cyan, matching their neon
-    g.strokeStyle = 'rgba(90, 210, 255, 0.5)';
-    g.lineWidth = 14 * s;
-    for (const d of [1, -1]) {
-      g.beginPath();
-      g.moveTo(px(d * 28), px(-d * 28));
-      g.lineTo(px(d * 63), px(-d * 63));
-      g.stroke();
-    }
-    // skyway — orange, and dashed because it is ABOVE you, not a road you can
-    // turn onto from here
-    g.strokeStyle = 'rgba(255, 140, 50, 0.65)';
-    g.lineWidth = 9 * s;
-    g.setLineDash([10, 7]);
-    g.beginPath();
-    g.moveTo(px(-90), px(120));
-    g.lineTo(px(90), px(120));
-    g.stroke();
-    g.setLineDash([]);
-    return c;
+    return drawArenaMap(Math.ceil(ARENA_HALF * 2 * s), arenaIdx);
   }
 
   popDamage(xPct: number, yPct: number, text: string, color: string) {

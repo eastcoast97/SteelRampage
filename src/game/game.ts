@@ -6,6 +6,13 @@ import { BotController } from './bots';
 import { PickupManager, PICKUP_COLORS, type PickupType } from './pickups';
 import { PedManager } from './peds';
 import { CAR_SPECS, BOT_NAMES, MAX_MISSILES, MAX_MINES, MAX_NUKES, type CarSpec } from './specs';
+import {
+  MG_RANGE, MG_DAMAGE, DASH_BASE, DASH_TIME, MINIGUN_SHOT, MINIGUN_TIME,
+  FLAME_DPS, FLAME_RANGE, FLAME_TIME, TURRET_SHOT, TURRET_RANGE, TURRET_TIME,
+  SLAM_DAMAGE, SLAM_RADIUS, BOMB_DAMAGE, REPAIR_HEAL,
+  SAW_DAMAGE, SAW_THROW_RANGE, SAW_CHARGE_TIME, SAW_GRIND_MIN_SPEED,
+  SPECIAL_RETRIGGER,
+} from './specials';
 import { buildCarMesh, makeContactShadow } from '../render/carMesh';
 import { buildRocket } from '../render/rocket';
 import { buildMine } from '../render/mine';
@@ -41,8 +48,6 @@ export const MODES: Record<GameMode, { name: string; desc: string; scoreLimit?: 
 // MAX: locked missile 34 > dumbfire 26.  MID: specials, hard-capped at
 // SPECIAL_CAP per activation per victim.  MIN: MG chip damage.  Rams ≤ RAM_CAP.
 const MG_COOLDOWN = 0.095;
-const MG_RANGE = 68;
-const MG_DAMAGE = 2.2;
 const MISSILE_DAMAGE_LOCKED = 34;
 const MISSILE_DAMAGE_DUMB = 26;
 const MISSILE_RADIUS = 7;
@@ -64,15 +69,9 @@ const NUKE_SPEED = 30;           // slow and flat — it has to be dodgeable
 const NUKE_FUSE = 3.2;
 const SPECIAL_CAP = 29;          // 0.85 × locked missile — specials can never exceed it
 /** seconds between bursts while a 45s special window is open */
-const SPECIAL_RETRIGGER: Record<string, number> = {
-  dash: 3, minigun: 5, flame: 3.5, turret: 6, slam: 4,
-  bomb: 1, repair: 7, minetrail: 3,
-};
 const RAM_CAP = 18;
-const SLAM_DAMAGE = 22;
 // the ring the player SEES is drawn to this too (effects.shockwave) — the reach
 // and the visual used to be separate literals and could drift apart
-const SLAM_RADIUS = 12.1;
 // REAPER's saw. Sits in the nuke's tier rather than the special tier: it is
 // ARMOR-PIERCING and above the locked missile, because unlike every other
 // special it cannot be earned by kills or picked up — the only way to charge it
@@ -80,7 +79,6 @@ const SLAM_RADIUS = 12.1;
 // is several seconds of going slow and predictable in the open on the thinnest
 // skin in the game. The reward for that has to be worth the exposure, and being
 // the one thing a JUGGERNAUT is actually afraid of is that reward.
-const SAW_DAMAGE = 36;
 // He THROWS it. The reference footage is unambiguous — the saw leaves his hand
 // and flies at the target — and it is the better mechanic anyway: at melee reach
 // the thinnest-skinned vehicle in the game has to be touching whatever it wants
@@ -88,10 +86,7 @@ const SAW_DAMAGE = 36;
 // buys reach: you are exposed while you grind, and the payoff is landing from
 // outside ramming range.
 const SAW_THROW_SPEED = 34;
-const SAW_THROW_RANGE = 34;
 const SAW_HIT_RADIUS = 2.6;
-const SAW_CHARGE_TIME = 5.0;     // seconds of continuous grinding for a full bar
-const SAW_GRIND_MIN_SPEED = 7;   // below this the blade is not biting
 const SAW_SWING_TIME = 0.5;
 // Arm poses as [shoulder x, y, z, elbow x] on the GENERATED RIG's left arm.
 // The saw hangs off the left hand bone, so posing the arm moves the saw for
@@ -133,11 +128,6 @@ const SAW_WHEELIE_ANGLE = 0.40;
 // slung diagonally across his back like a strap: tip high over his right
 // shoulder, handle low by his left hip
 // +SAW_WHEELIE_ANGLE baked in, because the render pass subtracts it again
-const FLAME_DPS = 20;
-const TURRET_SHOT = 2.0;
-const MINIGUN_SHOT = 3.5;
-const BOMB_DAMAGE = 29;
-const DASH_BASE = 12;
 
 // pedestrians: high-risk recovery — chase-speed gate + per-vehicle cooldown
 const PED_HEAL = 4;
@@ -1085,22 +1075,22 @@ export class Game {
     v.specialLedger.clear(); // fresh damage budget per activation
     const id = v.spec.specialId;
     if (id === 'dash') {
-      v.specialActiveTime = 1.8;
+      v.specialActiveTime = DASH_TIME;
       sfx.missileLaunch();
     } else if (id === 'minigun') {
-      v.specialActiveTime = 4;
+      v.specialActiveTime = MINIGUN_TIME;
       if (v === this.player) sfx.hit();
     } else if (id === 'flame') {
-      v.specialActiveTime = 3.2;
+      v.specialActiveTime = FLAME_TIME;
     } else if (id === 'turret') {
-      v.specialActiveTime = 5;
+      v.specialActiveTime = TURRET_TIME;
       v.turretTimer = 0;
     } else if (id === 'slam') {
       this.doSlam(v);
     } else if (id === 'bomb') {
       this.launchBomb(v);
     } else if (id === 'repair') {
-      v.health = Math.min(v.spec.maxHealth, v.health + 45);
+      v.health = Math.min(v.spec.maxHealth, v.health + REPAIR_HEAL);
       this.effects.sparks(v.position, 22, 0x3aff6e);
       if (v === this.player) sfx.pickup();
     }
@@ -1289,7 +1279,7 @@ export class Game {
       if (e === v || !e.alive) continue;
       _v1.copy(e.position).sub(pos);
       const dist = _v1.length();
-      if (dist > 13) continue;
+      if (dist > FLAME_RANGE) continue;
       if (fwd.dot(_v1.normalize()) < 0.8) continue;
       const dmg = this.drawSpecialBudget(v, e, FLAME_DPS * dt);
       if (dmg <= 0) continue;
@@ -1318,7 +1308,7 @@ export class Game {
     muzzle.y += v.spec.size.y * 2 + 0.8;
     // nearest enemy in ANY direction with line of sight
     let best: Vehicle | null = null;
-    let bestD = 48 * 48;
+    let bestD = TURRET_RANGE * TURRET_RANGE;
     for (const e of this.vehicles) {
       if (e === v || !e.alive) continue;
       const d = e.position.distanceToSquared(pos);

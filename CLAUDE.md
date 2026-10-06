@@ -254,6 +254,18 @@ A void under a structure is not a bug; being able to REACH it is. Probing for op
 
 SOAK GOTCHA: a soak run in a page that has already been used for staging is WORTHLESS — `g.bots = []` and manual teleports leave the other five cars parked, and the travel array (`[1113,74,13,15,41,6]`) looks like a bot-AI regression when it is just stale state. Reload, pick the car, start, then soak.
 
+Phase 3.15 (done): the game explains itself — vehicle briefing, map on the loading screen, controls from the pause menu.
+(1) **VEHICLE BRIEFING** (`#car-brief`, built in main.ts `showBrief`): selecting a car now shows a live TURNTABLE of the real mesh (`render/carPreview.ts` — its own small WebGLRenderer, because the menu has no Game and no scene), five stat bars WITH NUMBERS, and the special's name, the key, what it does and its range/damage/duration. The cards could only carry a name and three unlabelled bars, so you found out what you had picked once the match was already running.
+ARMOUR IS SHOWN AS EFFECTIVE HP, not the rating. Mitigation is `raw*100/(100+armor)`, so the rating is not a quantity anyone can reason about — 200 armour is not "twice as tough". The 100 pool scaled by it is, and it makes REAPER's -15 read as 85 HP, which is the clearest possible way to say "thinnest skin in the game".
+The preview frames from the BOUNDING SPHERE, not the box: the model spins, so what has to fit is the widest silhouette it will ever present, and a box measured at rest under-reports that by the diagonal. It reframes on resize (the panel stacks under 880px) and `preview.stop()`s on match start — it is a second renderer and costs a draw per frame. `window.__preview` is the debug handle.
+(2) **LOADING SCREEN** carries the arena map with labelled landmarks plus a briefing for a RANDOM vehicle — random on purpose: showing you the car you just chose teaches you nothing, whereas a rotating roster is how you learn what the other seven do.
+(3) **CONTROLS from the pause menu** (`#controls-panel`): the shared key list plus the CURRENT car's special, so "RCLICK / E" says what it does in the car you are actually sitting in. ESC closes the sheet rather than unpausing behind it, and the pause menu hides while it is open (it read through the overlay).
+**THE REAL WORK WAS KILLING THE DUPLICATION THIS WOULD HAVE CREATED**, which is the same lesson as rocket.ts/mine.ts/`laneAt()`:
+  * `game/specials.ts` — every special's damage, range and duration, which were loose consts inside game.ts. The menu quoting them would have been a second copy of every figure, and the stale one would be the one nobody notices. game.ts now imports them, and `SPECIAL_INFO` is built FROM them, so retuning a weapon retunes the briefing. Inline literals became constants in the same pass (`specialActiveTime = 4` → `MINIGUN_TIME`, the flame's `dist > 13` → `FLAME_RANGE`, turret's `48*48` → `TURRET_RANGE`, repair's `+45` → `REPAIR_HEAL`).
+  * `ui/arenaMap.ts` — the street-layout drawing, lifted out of the HUD's private `buildRadarMap` so the loading screen shows the same map. The radar now calls it.
+  * `ui/controls.ts` — the key list, which was static markup in index.html. Both the loading screen and the pause sheet render from it.
+Verified: all three screens populate on both arenas; turntable spins on the menu, is fully stopped during a match and resumes on quit; ESC→CONTROLS→ESC round-trips; REPAIR_HEAL measured at exactly 45 through the moved constant; 90s soak 751-2538m with 6 kills, no errors.
+
 Ideas: gamepad support, energy attacks (freeze), split-screen, dedicated server-sim (extract game.step from THREE/DOM), interpolation-delay auto-tuning from jitter.
 
 ## Testing recipe (headless, in preview eval)

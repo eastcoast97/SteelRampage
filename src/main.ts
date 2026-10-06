@@ -8,7 +8,7 @@ import { GTAOPass } from 'three/examples/jsm/postprocessing/GTAOPass.js';
 import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js';
 import { Game, FIXED_DT, MODES, type GameMode, type RosterEntry } from './game/game';
 import { CAR_SPECS, BOT_NAMES, type CarSpec } from './game/specs';
-import { ARENAS, loadSurfaceTextures } from './game/arena';
+import { ARENAS, loadSurfaceTextures, ARENA_HALF } from './game/arena';
 import { assetUrl } from './assets';
 import { RGBELoader } from 'three/examples/jsm/loaders/RGBELoader.js';
 import { Input } from './core/input';
@@ -17,6 +17,10 @@ import { Hud } from './ui/hud';
 import { sfx, type EngineKind } from './audio/sfx';
 import type { Vehicle } from './game/vehicle';
 import { NetClient, GuestSync, serializeSnapshot } from './net/net';
+import { SPECIAL_INFO } from './game/specials';
+import { drawArenaMap, ARENA_BRIEF } from './ui/arenaMap';
+import { renderControls } from './ui/controls';
+import { CarPreview } from './render/carPreview';
 
 // per-archetype engine audio: sports = screaming exotic, v8 = deep muscle, rally = punchy
 const ENGINE_KIND: Record<CarSpec['build'], EngineKind> = {
@@ -57,6 +61,49 @@ const loading = {
     clearInterval(this.tipTimer);
     this.tipTimer = setInterval(roll, 3600);
   },
+  /**
+   * The wait is the only moment a player will read anything, so it carries the
+   * map they are about to fight on and a briefing for one vehicle. The vehicle
+   * is RANDOM rather than the one selected: showing you your own car teaches you
+   * nothing you did not just choose, whereas a rotating roster is how you find
+   * out what the other seven do.
+   */
+  brief(arenaIdx: number) {
+    const a = ARENA_BRIEF[arenaIdx] ?? ARENA_BRIEF[0];
+    $('loading-map-name').textContent = a.name;
+    $('loading-map-blurb').textContent = a.blurb;
+    const holder = $('loading-map') as HTMLCanvasElement;
+    const SIZE = 260;
+    const map = drawArenaMap(SIZE, arenaIdx);
+    holder.width = holder.height = SIZE;
+    const g = holder.getContext('2d')!;
+    g.clearRect(0, 0, SIZE, SIZE);
+    g.drawImage(map, 0, 0);
+    // landmark pins, in map space (world metres → px, same transform as the map)
+    const px = (w: number) => (w / (ARENA_HALF * 2)) * SIZE + SIZE / 2;
+    g.font = '600 9px Inter, system-ui, sans-serif';
+    g.textAlign = 'center';
+    for (const [mx, mz, label] of a.marks) {
+      const x = px(mx), y = px(mz);
+      g.fillStyle = 'rgba(255, 190, 70, 0.95)';
+      g.beginPath();
+      g.arc(x, y, 3, 0, Math.PI * 2);
+      g.fill();
+      g.fillStyle = 'rgba(14, 18, 24, 0.8)';
+      const w = g.measureText(label).width + 6;
+      g.fillRect(x - w / 2, y - 16, w, 11);
+      g.fillStyle = 'rgba(255, 220, 160, 0.95)';
+      g.fillText(label, x, y - 7.5);
+    }
+    const spec = CAR_SPECS[Math.floor(Math.random() * CAR_SPECS.length)];
+    const info = SPECIAL_INFO[spec.specialId];
+    $('loading-car-name').textContent = spec.name;
+    $('loading-car-desc').textContent = spec.desc;
+    $('loading-car-special').innerHTML = `<b>◆ ${spec.specialName}</b> — ${info.effect}`;
+    $('loading-car-how').innerHTML = info.stats
+      .map((st) => `<span><i>${st.label}</i> ${st.value}</span>`).join('')
+      + `<span><i>USE</i> ${info.how}</span>`;
+  },
   progress(pct: number, status?: string) {
     $('loading-fill').style.width = `${pct}%`;
     if (status) $('loading-status').textContent = status;
@@ -73,6 +120,7 @@ const loading = {
 
 async function boot() {
   loading.show('LOADING ASSETS', 8);
+  loading.brief(Math.floor(Math.random() * ARENA_BRIEF.length));
   const tracked = <T,>(p: Promise<T>, pct: number, label: string): Promise<T> =>
     p.then((v) => { loading.progress(pct, label); return v; });
   await Promise.all([
@@ -399,9 +447,50 @@ async function boot() {
       selectedSpec = spec;
       document.querySelectorAll('.car-card').forEach((c) => c.classList.remove('selected'));
       card.classList.add('selected');
+      showBrief(spec);
     });
     carSelect.appendChild(card);
   }
+
+  // ---- vehicle briefing: what it looks like, what it takes, what it does ----
+  // The cards can only carry a name and three unlabelled bars. Picking a car
+  // used to mean finding out what you had chosen once the match was running —
+  // so the selection drives a turntable of the real mesh and a full readout.
+  const preview = new CarPreview($('car-preview') as HTMLCanvasElement);
+  (window as any).__preview = preview;   // debug handle, like __game/__fx
+  /** 0..1 for the bar, plus the number, because a bar alone cannot be compared */
+  const statRow = (label: string, frac: number, value: string) =>
+    `<div class="cb-stat"><span class="cb-lab">${label}</span>` +
+    `<span class="cb-bar"><i style="width:${Math.round(Math.max(0, Math.min(1, frac)) * 100)}%"></i></span>` +
+    `<span class="cb-val">${value}</span></div>`;
+
+  function showBrief(spec: CarSpec) {
+    preview.show(spec);
+    const info = SPECIAL_INFO[spec.specialId];
+    $('cb-name').textContent = spec.name;
+    $('cb-name').setAttribute('style',
+      `color:#${(((spec.color >> 16) & 0xff) + ((spec.color >> 8) & 0xff) + (spec.color & 0xff) < 260
+        ? spec.accent : spec.color).toString(16).padStart(6, '0')}`);
+    $('cb-desc').textContent = spec.desc;
+    // Effective HP, not the armour rating. Mitigation is raw*100/(100+armor), so
+    // the rating is not a quantity anyone can reason about — 200 armour does not
+    // mean "twice as tough". What you survive is the 100 pool scaled by it, and
+    // REAPER's -15 showing as 85 is the clearest way to say it is made of paper.
+    const ehp = Math.round(spec.maxHealth * (100 + spec.armor) / 100);
+    $('cb-stats').innerHTML =
+      statRow('TOP SPEED', spec.topSpeed / 36, `${spec.topSpeed.toFixed(1)} m/s`) +
+      statRow('ARMOUR', ehp / 300, `${ehp} effective HP`) +
+      statRow('ACCEL', spec.accel / 36, `${spec.accel} m/s²`) +
+      statRow('GRIP', spec.grip / 7.8, spec.grip.toFixed(1)) +
+      statRow('TURBO', spec.turboMax / 4, `${spec.turboMax.toFixed(1)}s`);
+    const sp = $('cb-special');
+    (sp.querySelector('.cb-sp-name') as HTMLElement).textContent = `◆ ${spec.specialName}`;
+    (sp.querySelector('.cb-sp-how') as HTMLElement).textContent = info.how;
+    (sp.querySelector('.cb-sp-effect') as HTMLElement).textContent = info.effect;
+    (sp.querySelector('.cb-sp-stats') as HTMLElement).innerHTML = info.stats
+      .map((st) => `<span><i>${st.label}</i>${st.value}</span>`).join('');
+  }
+  showBrief(selectedSpec);
 
   // ---- lobby UI ----
   function updateLobbyUI() {
@@ -541,6 +630,7 @@ async function boot() {
 
   // ---- match lifecycle ----
   function enterMatchUI() {
+    preview.stop();            // nothing to show, and it costs a draw per frame
     $('menu').classList.add('hidden');
     $('gameover').classList.add('hidden');
     $('pause').classList.add('hidden');
@@ -575,6 +665,7 @@ async function boot() {
     }
 
     applyEnv(game);
+    loading.brief(game.arenaIdx ?? 0);
     sfx.setEngineProfile(ENGINE_KIND[game.player.spec.build]);
     game.onGameOver = (standings, playerWon, subtitle) => showGameOver(standings, playerWon, subtitle);
     (window as any).__game = game;
@@ -590,6 +681,7 @@ async function boot() {
     guestOverShown = false;
     game = new Game(CAR_SPECS[0], hud, window.innerWidth / window.innerHeight, m.mode,
       { role: 'guest', roster: m.roster, playerIdx: m.myIdx, skyIdx: m.skyIdx }, m.arena ?? 0);
+    loading.brief(m.arena ?? 0);
     guestSync = new GuestSync(game, m.myIdx);
     game.enableGuestPrediction();
     applyEnv(game);
@@ -618,8 +710,10 @@ async function boot() {
     sfx.engineOff();
     hud.hide();
     $('pause').classList.add('hidden');
+    $('controls-panel').classList.add('hidden');
     $('gameover').classList.add('hidden');
     $('menu').classList.remove('hidden');
+    preview.start();
     updateLobbyUI();
   }
 
@@ -628,8 +722,37 @@ async function boot() {
     // online matches never freeze the world — ESC is just an overlay
     if (!netRole) game.paused = p;
     $('pause').classList.toggle('hidden', !p);
+    if (!p) $('controls-panel').classList.add('hidden');
     if (p) sfx.engineOff();
   }
+
+  // ---- controls reference, from the pause menu ----
+  // Built from the shared CONTROLS list, same as the loading screen, and it
+  // carries the CURRENT car's special so "RCLICK / E" says what that actually
+  // does in the car you are sitting in — which is the thing you paused to check.
+  renderControls($('loading-controls-grid'));
+  renderControls($('controls-grid'));
+  function openControls() {
+    const spec = game?.player?.spec ?? selectedSpec;
+    const info = SPECIAL_INFO[spec.specialId];
+    $('controls-special').innerHTML =
+      `<div class="cs-head">${spec.name} — ${spec.specialName}</div>` +
+      `<div class="cs-how">${info.how}</div>` +
+      `<div class="cs-effect">${info.effect}</div>` +
+      `<div class="cs-stats">${info.stats.map((st) => `<span><i>${st.label}</i>${st.value}</span>`).join('')}</div>`;
+    $('controls-panel').classList.remove('hidden');
+    // the pause menu sits behind this and reads through the overlay, so take it
+    // down rather than tinting it further
+    $('pause').classList.add('hidden');
+  }
+  function closeControls() {
+    $('controls-panel').classList.add('hidden');
+    if (game && game.state === 'playing' && (netRole ? true : game.paused)) {
+      $('pause').classList.remove('hidden');
+    }
+  }
+  $('controls-btn').addEventListener('click', openControls);
+  $('controls-close').addEventListener('click', closeControls);
 
   function showGameOver(standings: Vehicle[], playerWon: boolean, subtitle: string) {
     hud.hide();
@@ -744,7 +867,12 @@ async function boot() {
     frameCount++;
 
     if (input.consumeMute()) sfx.toggleMuted();
-    if (input.consumePause() && game && game.state === 'playing') setPaused($('pause').classList.contains('hidden'));
+    if (input.consumePause() && game && game.state === 'playing') {
+      // ESC with the controls sheet open closes the sheet, not the pause menu —
+      // otherwise it unpauses behind the thing you are still reading
+      if (!$('controls-panel').classList.contains('hidden')) closeControls();
+      else setPaused($('pause').classList.contains('hidden'));
+    }
 
     if (!game) { last = now; lastRenderAt = now; return; }
     const rdt = Math.min(0.1, Math.max(0.001, (now - lastRenderAt) / 1000));
@@ -799,6 +927,7 @@ async function boot() {
   };
 
   await loading.done('READY');
+  preview.start();
 }
 
 boot();
