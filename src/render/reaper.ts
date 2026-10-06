@@ -150,9 +150,21 @@ export function buildReaper(spec: CarSpec, _colorOverride?: number): ReaperResul
     // eyeballing the model's own origin, which sits wherever the generator put it
     man.position.set(0, -0.10, 0.30);
     rider.add(man);
-    // the saw hangs off his LEFT HAND BONE, so it follows the arm by itself —
-    // there is no second pose system to keep in step
-    if (bones.handL) bones.handL.add(sawArm); else rider.add(sawArm);
+    // The saw hangs off his LEFT HAND BONE, so it follows the arm by itself and
+    // there is no second pose system to keep in step.
+    //
+    // UNDO THE BONE'S SCALE. The armature carries a 0.01 scale (its bone
+    // positions are ~100x to match), so anything parented to a bone inherits
+    // that: the saw rendered at 1.1 * 0.0094 = ONE CENTIMETRE, and all you could
+    // see of it was the fire particles, which are emitted in world space.
+    if (bones.handL) {
+      bones.handL.add(sawArm);
+      man.updateMatrixWorld(true);
+      const hs = bones.handL.getWorldScale(new THREE.Vector3());
+      sawArm.scale.setScalar(1 / Math.max(1e-4, hs.x));
+    } else {
+      rider.add(sawArm);
+    }
   } else {
     rider.add(sawArm);
   }

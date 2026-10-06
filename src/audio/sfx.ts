@@ -46,6 +46,16 @@ class Sfx {
   private grindRasp: OscillatorNode | null = null;
   private grindLfo: OscillatorNode | null = null;
   private grindSub: OscillatorNode | null = null;
+  /**
+   * THE ONE RECORDED SOUND IN THE GAME.
+   *
+   * Everything else here is synthesised, deliberately. This is not, because
+   * procedural VOCAL synthesis is the one thing WebAudio cannot do convincingly
+   * — formant-filtered sawtooths read as a synth lead imitating a person however
+   * the formants are tuned, and two attempts at it were binned. The laugh is
+   * generated speech (Higgsfield TTS), trimmed to the opening burst.
+   */
+  private laughBuf: AudioBuffer | null = null;
   private noiseBuf: AudioBuffer | null = null;
   // continuous road voices, started once and driven by gain/filter from then on
   private windGain: GainNode | null = null;
@@ -83,6 +93,7 @@ class Sfx {
   init() {
     if (this.ctx) return;
     this.ctx = new AudioContext();
+    this.loadLaugh();   // fetch now, so the first throw is not the one that misses
     this.master = this.ctx.createGain();
     this.master.gain.value = 0.35;
     this.master.connect(this.ctx.destination);
@@ -491,9 +502,32 @@ class Sfx {
    * good at: a hard whoosh of band-passed noise sweeping upward as it leaves,
    * and the chain whining down in pitch as it spins away.
    */
+  /** fetched once, on the first user gesture that creates the context */
+  private loadLaugh() {
+    if (!this.ctx || this.laughBuf) return;
+    fetch(assetUrl('audio/reaper-laugh.wav'))
+      .then((r) => r.arrayBuffer())
+      .then((b) => this.ctx!.decodeAudioData(b))
+      .then((buf) => { this.laughBuf = buf; })
+      .catch(() => { /* no laugh: the mechanical cue below still plays */ });
+  }
+
   sawThrow(vol = 1) {
     if (!this.ctx || !this.master) return;
     const t = this.ctx.currentTime;
+
+    // the laugh, over the top of the mechanical cue
+    if (this.laughBuf) {
+      const lv = this.ctx.createBufferSource();
+      lv.buffer = this.laughBuf;
+      lv.playbackRate.value = 0.92;      // dropped a touch: nastier, less chirpy
+      const lg = this.ctx.createGain();
+      lg.gain.value = 0.85 * vol;
+      lv.connect(lg).connect(this.master);
+      lv.start(t + 0.1);                 // a beat behind the throw itself
+    } else {
+      this.loadLaugh();
+    }
 
     // WHOOSH — noise through a bandpass that sweeps up and out
     const len = Math.floor(this.ctx.sampleRate * 0.5);
