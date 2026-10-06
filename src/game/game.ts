@@ -1108,8 +1108,14 @@ export class Game {
    */
   private handleSaw(v: Vehicle, dt: number) {
     const speed = v.forwardSpeed;
+    // What he is DOING is a function of the button, not of the bar. A full bar
+    // used to end the grind on the spot — the wheelie dropped, the blade came
+    // off the road and the sparks stopped while the player was still holding E,
+    // which reads as the weapon misfiring at the exact moment it became usable.
+    // Only the CHARGING stops at full (the clamp below); the pose, the sparks
+    // and the engine note all run until he lets go.
     const grinding = v.input.specialHeld && v.grounded && speed > SAW_GRIND_MIN_SPEED
-      && v.specialEnergy < 1 && v.alive;
+      && v.alive;
 
     if (grinding) {
       v.specialEnergy = Math.min(1, v.specialEnergy + dt / SAW_CHARGE_TIME);
